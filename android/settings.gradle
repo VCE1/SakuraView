@@ -11,6 +11,7 @@ pluginManagement {
 
     repositories {
         // 首先添加国内镜像源，Gradle 会按顺序查找
+        maven { url 'https://storage.flutter-io.cn/download.flutter.io' }
         maven { url 'https://maven.aliyun.com/repository/google' }
         maven { url 'https://maven.aliyun.com/repository/public' }
         maven { url 'https://maven.aliyun.com/repository/jcenter' }
@@ -31,6 +32,7 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         // 1. 添加 Flutter 引擎专用镜像 (非常重要)
+        maven { url 'https://storage.flutter-io.cn/download.flutter.io' }
         maven { url 'https://storage.googleapis.com/download.flutter.io' }
 
         // 2. 之前的阿里云镜像
