@@ -1,5 +1,5 @@
 ﻿import 'package:flutter/material.dart';
-import 'package:vce1_sakuraview/utils/favorites.dart'; // 鍋囪浣犵殑 FavoritesManager 鍦ㄨ繖閲?
+import 'package:vce1_sakuraview/utils/favorites.dart';
 
 class FavoritesNotifier extends ChangeNotifier {
   List<Map<String, dynamic>> _favoriteItems = [];
@@ -12,7 +12,7 @@ class FavoritesNotifier extends ChangeNotifier {
   Future<void> _loadFavorites() async {
     final favorites = await FavoritesManager.getFavorites();
     _favoriteItems = favorites;
-    _favoriteIdentifiers.clear(); // 鍏堟竻绌猴紝鍐嶉噸鏂板～鍏?
+    _favoriteIdentifiers.clear();
     for (var item in favorites) {
       _favoriteIdentifiers
           .add((item['id']?.toString() ?? item['file_url']) as String);
@@ -37,7 +37,6 @@ class FavoritesNotifier extends ChangeNotifier {
       await FavoritesManager.addFavorite(postData);
       await _loadFavorites();
     }
-    notifyListeners(); // 閫氱煡鎵€鏈夌洃鍚€呯姸鎬佸凡鏀瑰彉
+    notifyListeners();
   }
 }
-

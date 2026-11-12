@@ -20,7 +20,7 @@ abstract class ImageApiClient {
 
   Map<String, String> get headers => {
         'Content-Type': 'application/json',
-        'User-Agent': 'vce1.sakuraview/1.0',
+        'User-Agent': 'vce1.sakuraview/1.1 (vce1)',
       };
 
   Uri buildUri(String path, Map<String, String> queryParams) {
@@ -57,11 +57,22 @@ abstract class ImageApiClient {
     int page = 1,
     int limit = 20,
     String? sort,
+    bool safeMode = false,
   });
 
   Future<PostHiveModel?> getPostDetail(String id);
 
   Future<List<String>> searchTags(String query);
+
+  Future<List<Map<String, dynamic>>> fetchChildPosts(int parentId) async {
+    try {
+      final posts = await searchPosts(tags: 'parent:$parentId', limit: 100);
+      return posts.map((p) => p.toApiMap()).toList();
+    } catch (e) {
+      _log.warning('fetchChildPosts($parentId) on ${site.name} failed: $e');
+      return [];
+    }
+  }
 
   Future<void> close() async {}
 
@@ -92,7 +103,21 @@ abstract class ImageApiClient {
   @protected
   int? resolveInt(dynamic value) {
     if (value is int) return value;
+    if (value is num) return value.toInt();
     if (value is String) return int.tryParse(value);
+    return null;
+  }
+
+  @protected
+  int? resolveTimestamp(dynamic value) {
+    final asInt = resolveInt(value);
+    if (asInt != null) return asInt;
+    if (value is String && value.isNotEmpty) {
+      final dt = DateTime.tryParse(value);
+      if (dt != null) {
+        return dt.millisecondsSinceEpoch ~/ 1000;
+      }
+    }
     return null;
   }
 

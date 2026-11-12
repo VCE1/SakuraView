@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
@@ -8,6 +9,7 @@ import 'package:logging/logging.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/providers/recent_tags_notifier.dart';
 import 'package:vce1_sakuraview/widgets/android/android_full_image_screen.dart';
+import 'package:vce1_sakuraview/widgets/windows/window_full_image_screen.dart';
 import 'package:vce1_sakuraview/widgets/common/group_posts_screen.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
 
@@ -88,6 +90,7 @@ class _SearchPageState extends State<SearchPage> {
         tags: query,
         page: _currentPage,
         limit: _perPage,
+        safeMode: siteConfig.config.safeMode,
       );
 
       if (!mounted) return;
@@ -144,6 +147,7 @@ class _SearchPageState extends State<SearchPage> {
               ),
             ),
             textInputAction: TextInputAction.search,
+            onChanged: (_) => setState(() {}),
             onSubmitted: (_) => _search(clear: true),
           ),
         ),
@@ -197,7 +201,7 @@ class _SearchPageState extends State<SearchPage> {
           child: MasonryGridView.count(
             controller: _scrollController,
             crossAxisCount:
-                (MediaQuery.of(context).size.width / 180).floor().clamp(2, 4),
+                (MediaQuery.of(context).size.width / 180).floor().clamp(2, 6),
             mainAxisSpacing: 8,
             crossAxisSpacing: 8,
             itemCount: _results.length + (_hasMore ? 1 : 0),
@@ -223,7 +227,7 @@ class _SearchPageState extends State<SearchPage> {
                   item['has_children'] as bool? ?? false;
 
               return GestureDetector(
-                onTap: () {
+                onTap: () async {
                   if (hasChildren) {
                     Navigator.push(
                       context,
@@ -233,12 +237,17 @@ class _SearchPageState extends State<SearchPage> {
                     );
                     return;
                   }
-                  Navigator.push(
+                  final tag = await Navigator.push<String>(
                     context,
                     MaterialPageRoute(
-                      builder: (context) => AndroidFullImageScreen(postData: item),
+                      builder: (context) => Platform.isWindows
+                          ? WindowsFullImageScreen(postData: item)
+                          : AndroidFullImageScreen(postData: item),
                     ),
                   );
+                  if (tag != null && tag.isNotEmpty && mounted) {
+                    _applyTag(tag);
+                  }
                 },
                 child: Card(
                   clipBehavior: Clip.antiAlias,

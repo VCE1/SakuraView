@@ -15,9 +15,21 @@ class DanbooruApiClient extends ImageApiClient {
   @override
   Map<String, String> get headers => {
         'Content-Type': 'application/json',
-        'User-Agent':
-            username.isNotEmpty ? 'vce1.sakuraview/1.0 ($username)' : 'vce1.sakuraview/1.0',
+        'User-Agent': username.isNotEmpty
+            ? 'vce1.sakuraview/1.1 ($username)'
+            : 'vce1.sakuraview/1.1 (vce1)',
       };
+
+  Map<String, String> _withAuth(Map<String, String> params) {
+    if (username.isNotEmpty && apiKey.isNotEmpty) {
+      return {
+        ...params,
+        'login': username,
+        'api_key': apiKey,
+      };
+    }
+    return params;
+  }
 
   @override
   Future<List<PostHiveModel>> searchPosts({
@@ -25,13 +37,23 @@ class DanbooruApiClient extends ImageApiClient {
     int page = 1,
     int limit = 20,
     String? sort,
+    bool safeMode = false,
   }) async {
-    final queryParams = <String, String>{
+    final tagParts = <String>[];
+    if (tags != null && tags.trim().isNotEmpty) {
+      tagParts.add(tags.trim());
+    }
+    if (safeMode && !tagParts.any((t) => t.contains('rating:'))) {
+      tagParts.add('rating:general');
+    }
+    final effectiveTags = tagParts.join(' ');
+
+    final queryParams = _withAuth(<String, String>{
       'limit': '$limit',
       'page': '$page',
-      if (tags != null && tags.isNotEmpty) 'tags': tags,
+      if (effectiveTags.isNotEmpty) 'tags': effectiveTags,
       if (sort != null) 'search[sort]': sort,
-    };
+    });
 
     final uri = buildUri('/posts.json', queryParams);
     _logger.info('Danbooru search: $uri');
@@ -50,7 +72,12 @@ class DanbooruApiClient extends ImageApiClient {
         if (item is! Map<String, dynamic>) continue;
         try {
           final post = parsePost(item);
-          if (post.id > 0) posts.add(post);
+          if (post.id > 0 &&
+              ((post.previewUrl?.isNotEmpty ?? false) ||
+                  (post.sampleUrl?.isNotEmpty ?? false) ||
+                  (post.fileUrl?.isNotEmpty ?? false))) {
+            posts.add(post);
+          }
         } catch (e) {
           _logger.warning('Danbooru: failed to parse post id=${item['id'] ?? '?'}: $e');
         }
@@ -67,7 +94,7 @@ class DanbooruApiClient extends ImageApiClient {
 
   @override
   Future<PostHiveModel?> getPostDetail(String id) async {
-    final uri = buildUri('/posts/$id.json', {});
+    final uri = buildUri('/posts/$id.json', _withAuth({}));
     _logger.info('Danbooru post detail: $uri');
 
     try {
@@ -88,7 +115,10 @@ class DanbooruApiClient extends ImageApiClient {
 
   @override
   Future<List<String>> searchTags(String query) async {
-    final uri = buildUri('/tags.json', {'search[name_matches]': query, 'limit': '20'});
+    final uri = buildUri(
+      '/tags.json',
+      _withAuth({'search[name_matches]': '$query*', 'limit': '20'}),
+    );
     _logger.info('Danbooru tag search: $uri');
 
     try {
@@ -110,30 +140,81 @@ class DanbooruApiClient extends ImageApiClient {
     final file = json['file'] as Map<String, dynamic>? ?? {};
     final preview = json['preview'] as Map<String, dynamic>? ?? {};
     final largeFile = json['large_file'] as Map<String, dynamic>? ?? {};
-    final tagsList = (json['tag_string'] as String?)?.split(' ') ?? [];
+
+    // Also inspect media_asset.variants from Danbooru API v2
+    String? variantPreviewUrl;
+    String? variantSampleUrl;
+    String? variantOriginalUrl;
+    final mediaAsset = json['media_asset'];
+    if (mediaAsset is Map<String, dynamic>) {
+      final variants = mediaAsset['variants'];
+      if (variants is List) {
+        for (final v in variants) {
+          if (v is! Map<String, dynamic>) continue;
+          final type = v['type'] as String? ?? '';
+          final url = v['url'] as String? ?? '';
+          if (url.isEmpty) continue;
+          if (type == '360x360') {
+            variantPreviewUrl = url;
+          } else if (type == '180x180' && variantPreviewUrl == null) {
+            variantPreviewUrl = url;
+          } else if (type == 'sample' || type == '720x720') {
+            variantSampleUrl ??= url;
+          } else if (type == 'original') {
+            variantOriginalUrl = url;
+          }
+        }
+      }
+    }
+
+    final resolvedPreview = resolveUrl(json, ['preview_file_url', 'preview_url']) ??
+        (preview['url'] as String?) ??
+        variantPreviewUrl ??
+        '';
+    final resolvedFile = resolveUrl(json, ['file_url']) ??
+        (file['url'] as String?) ??
+        variantOriginalUrl ??
+        '';
+    final resolvedSample = resolveUrl(json, ['large_file_url', 'sample_url']) ??
+        (largeFile['url'] as String?) ??
+        variantSampleUrl ??
+        resolvedFile;
+
+    final rawTagStr = (json['tag_string'] as String?) ?? (json['tags'] as String?) ?? '';
+    final uploaderName = (json['uploader'] is Map)
+        ? (json['uploader']['name'] as String?)
+        : null;
+    final artistTag = (json['tag_string_artist'] as String?)?.trim();
+    final resolvedAuthor = (uploaderName != null && uploaderName.isNotEmpty)
+        ? uploaderName
+        : (artistTag != null && artistTag.isNotEmpty ? artistTag : 'unknown');
 
     return PostHiveModel()
       ..id = resolveInt(json['id']) ?? 0
-      ..tags = normalizeTags(tagsList.join(' '))
-      ..author = (json['uploader']?['name'] as String?) ?? 'unknown'
+      ..tags = rawTagStr.trim()
+      ..author = resolvedAuthor
       ..creatorId = resolveInt(json['uploader_id'])
       ..source = json['source'] as String? ?? ''
-      ..fileSize = resolveInt(file['size'])
-      ..createdAt = resolveInt(json['created_at'])
+      ..fileSize = resolveInt(json['file_size']) ?? resolveInt(file['size'])
+      ..createdAt = resolveTimestamp(json['created_at'])
       ..rating = json['rating'] as String? ?? 'q'
       ..score = resolveScore(json['score'])
-      ..width = resolveInt(json['image_width']) ?? 0
-      ..height = resolveInt(json['image_height']) ?? 0
-      ..previewUrl = preview['url'] as String? ?? ''
-      ..sampleUrl = largeFile['url'] as String? ?? file['url'] as String? ?? ''
-      ..fileUrl = file['url'] as String? ?? ''
-      ..fileExt = file['ext'] as String? ??
-          _extFromUrl(file['url'] as String? ?? '')
-      ..hasChildren = resolveBool(json['has_children']);
+      ..width = resolveInt(json['image_width']) ?? resolveInt(json['width']) ?? 0
+      ..height = resolveInt(json['image_height']) ?? resolveInt(json['height']) ?? 0
+      ..previewUrl = resolvedPreview.isNotEmpty ? resolvedPreview : resolvedSample
+      ..sampleUrl = resolvedSample.isNotEmpty ? resolvedSample : resolvedPreview
+      ..fileUrl = resolvedFile.isNotEmpty ? resolvedFile : resolvedSample
+      ..fileExt = (json['file_ext'] as String?) ??
+          (file['ext'] as String?) ??
+          _extFromUrl(resolvedFile)
+      ..hasChildren = resolveBool(json['has_children']) ??
+          resolveBool(json['has_active_children']);
   }
 
   String _extFromUrl(String url) {
-    final uri = Uri.parse(url);
+    if (url.isEmpty) return 'jpg';
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.pathSegments.isEmpty) return 'jpg';
     final ext = uri.pathSegments.last.split('.').lastOrNull;
     if (ext != null && ext.length <= 5) return ext;
     return 'jpg';

@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/providers/theme_provider.dart';
 import 'package:vce1_sakuraview/utils/proxy_settings_page.dart';
 import 'package:vce1_sakuraview/utils/download_settings_page.dart';
@@ -31,6 +32,58 @@ class SettingsPage extends StatelessWidget {
                 );
               }).toList(),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSiteCredentialsDialog(
+      BuildContext context, SiteConfigProvider siteProvider) {
+    final userCtrl = TextEditingController(text: siteProvider.config.username);
+    final keyCtrl = TextEditingController(text: siteProvider.config.apiKey);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Site Credentials & API Key'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: userCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Username (Danbooru / Zerochan UA)',
+                hintText: 'e.g. vce1',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: keyCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'API Key (Optional)',
+                hintText: 'Danbooru API key or Zerochan token',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await siteProvider.setUsername(userCtrl.text.trim());
+              await siteProvider.setApiKey(keyCtrl.text.trim());
+              if (ctx.mounted) {
+                Navigator.pop(ctx);
+              }
+            },
+            child: const Text('Save'),
           ),
         ],
       ),
@@ -70,6 +123,22 @@ class SettingsPage extends StatelessWidget {
                 MaterialPageRoute(
                   builder: (context) => const ProxySettingsPage(),
                 ),
+              );
+            },
+          ),
+          Consumer<SiteConfigProvider>(
+            builder: (context, siteProvider, child) {
+              final user = siteProvider.config.username;
+              return ListTile(
+                leading: const Icon(Icons.vpn_key_outlined),
+                title: const Text('Site Account & API Key'),
+                subtitle: Text(
+                  user.isNotEmpty
+                      ? 'Username: $user'
+                      : 'Configure username / API key for Danbooru & Zerochan',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _showSiteCredentialsDialog(context, siteProvider),
               );
             },
           ),

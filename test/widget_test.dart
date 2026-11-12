@@ -81,13 +81,76 @@ void main() {
       await ProxyConfig.saveProxyMode(ProxyMode.none);
       expect(await ProxyConfig.isProxyEnabled(), isFalse);
 
-      final directive = ProxyConfig.resolveProxyDirectiveForUri(
-        Uri.parse('https://zerochan.net/?json'),
+      final zerochanDirect = ProxyConfig.resolveProxyDirectiveForUri(
+        Uri.parse('https://www.zerochan.net/?json'),
         mode: ProxyMode.none,
         manualAddress: '192.168.6.233:7890',
         systemProxy: const SystemProxyInfo(host: '192.168.6.233', port: 7890),
       );
-      expect(directive, 'DIRECT');
+      expect(zerochanDirect, 'DIRECT');
+    });
+
+    test('Danbooru v2 JSON and Zerochan malformed JSON wrapper parse accurately', () {
+      final danbooruClient = DanbooruApiClient();
+      final danbooruV2 = <String, dynamic>{
+        'id': 12527336,
+        'created_at': '2026-11-12T01:53:04.077-05:00',
+        'uploader_id': 1314269,
+        'score': 42,
+        'source': 'https://www.bilibili.com/opus/1269705586735316997',
+        'rating': 'g',
+        'image_width': 2480,
+        'image_height': 3820,
+        'tag_string': 'absurdres highres youguo_naberu',
+        'tag_string_artist': 'youguo_naberu',
+        'file_ext': 'jpg',
+        'file_size': 1321127,
+        'has_children': false,
+        'file_url': 'https://cdn.donmai.us/original/b5/5f/b55fae4c2a8f3ca9501867dbeb2f3784.jpg',
+        'large_file_url': 'https://cdn.donmai.us/sample/b5/5f/sample-b55fae4c2a8f3ca9501867dbeb2f3784.jpg',
+        'preview_file_url': 'https://cdn.donmai.us/180x180/b5/5f/b55fae4c2a8f3ca9501867dbeb2f3784.jpg',
+      };
+      final dp = danbooruClient.parsePost(danbooruV2);
+      expect(dp.id, 12527336);
+      expect(dp.author, 'youguo_naberu');
+      expect(dp.fileUrl, contains('cdn.donmai.us/original'));
+      expect(dp.sampleUrl, contains('cdn.donmai.us/sample'));
+      expect(dp.previewUrl, contains('cdn.donmai.us/180x180'));
+      expect(dp.createdAt, isNotNull);
+      expect(dp.createdAt, greaterThan(1700000000));
+
+      const rawZerochanBody = '''
+{
+{
+    "items": [
+        {
+            "id": "4735953",
+            "width": "914",
+            "height": "1400",
+            "md5": "ae8e6f0d5efdacb06e6490855f1ff9ad",
+            "thumbnail": "https://s3.zerochan.net/240/03/19/4735953.avif",
+            "source": "https://www.pixiv.net/en/artworks/151952711",
+            "tag": "Benio (Dontsugel)",
+            "tags": [
+                "Female",
+                "Genshin Impact",
+                "Solo"
+            ]
+        }
+    ]
+}<p id="browse-filters">HTML trailing noise</p>}''';
+
+      final extracted = ZerochanApiClient.extractZerochanJson(rawZerochanBody);
+      expect(extracted, isNotNull);
+      final items = extracted!['items'] as List<dynamic>;
+      expect(items.length, 1);
+
+      final zcClient = ZerochanApiClient();
+      final zp = zcClient.parsePost(items.first as Map<String, dynamic>);
+      expect(zp.id, 4735953);
+      expect(zp.previewUrl, 'https://s3.zerochan.net/240/03/19/4735953.jpg');
+      expect(zp.sampleUrl, 'https://s1.zerochan.net/600/03/19/4735953.jpg');
+      expect(zp.tags, 'Female Genshin_Impact Solo');
     });
 
     test('Global SakuraHttpOverrides installs cleanly', () async {

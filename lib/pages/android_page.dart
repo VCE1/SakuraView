@@ -92,6 +92,7 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
       final fetchedPosts = await apiClient.searchPosts(
         page: currentPage,
         limit: imagesPerPage,
+        safeMode: siteConfig.config.safeMode,
       );
 
       if (!_isDisposed && mounted) {
@@ -511,6 +512,7 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
               drawer: AppDrawer(
                 isSafeMode: siteConfig.config.safeMode,
                 onSafeModeChanged: handleSafeModeChanged,
+                onSiteChanged: handleSiteChanged,
                 onHomeTapped: handleHomeTapped,
                 onFavoritesTapped: handleFavoritesTapped,
                 onDownloadsTapped: handleDownloadsTapped,

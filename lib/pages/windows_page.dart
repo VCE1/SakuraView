@@ -16,6 +16,7 @@ import 'package:vce1_sakuraview/widgets/windows/window_full_image_screen.dart';
 import 'package:vce1_sakuraview/widgets/common/group_posts_screen.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
 import 'package:vce1_sakuraview/models/site_config.dart';
+import 'package:vce1_sakuraview/pages/search_page.dart';
 
 class WindowImageGridPage extends StatefulWidget {
   const WindowImageGridPage({super.key});
@@ -27,6 +28,8 @@ class WindowImageGridPage extends StatefulWidget {
 class WindowImageGridPageState extends State<WindowImageGridPage> {
   List<Map<String, dynamic>> imageList = [];
   bool showFavoritesView = false;
+  bool showSearchView = false;
+  String? _searchTag;
   int currentPage = 1;
   final int imagesPerPage = 40;
 
@@ -60,7 +63,9 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
   }
 
   void _onScroll() {
-    if (showFavoritesView || isLoading || !_scrollController.hasClients) return;
+    if (showFavoritesView || showSearchView || isLoading || !_scrollController.hasClients) {
+      return;
+    }
     final maxScroll = _scrollController.position.maxScrollExtent;
     final currentScroll = _scrollController.position.pixels;
     if (currentScroll >= maxScroll && maxScroll > 0) {
@@ -87,6 +92,7 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
       final fetchedPosts = await apiClient.searchPosts(
         page: currentPage,
         limit: imagesPerPage,
+        safeMode: siteConfig.config.safeMode,
       );
 
       if (!_isDisposed && mounted) {
@@ -131,16 +137,21 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
 
   void handleHomeTapped() {
     if (!mounted) return;
-    setState(() => showFavoritesView = false);
+    setState(() {
+      showFavoritesView = false;
+      showSearchView = false;
+    });
     Navigator.pop(context);
     fetchImages(clear: true);
   }
 
   void handleFavoritesTapped() {
     if (!mounted) return;
-    setState(() => showFavoritesView = true);
+    setState(() {
+      showFavoritesView = true;
+      showSearchView = false;
+    });
     Navigator.pop(context);
-    Provider.of<FavoritesNotifier>(context, listen: false);
   }
 
   void handleDownloadsTapped() {
@@ -174,9 +185,18 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
       builder: (context, favoritesNotifier, child) {
         Widget bodyContent;
 
-        if (showFavoritesView) {
+        if (showSearchView) {
+          bodyContent = SearchPage(initialTag: _searchTag);
+        } else if (showFavoritesView) {
           bodyContent = FavoriteDisplayWidget(
             favoriteItems: favoritesNotifier.favoriteItems,
+            onTagSelected: (tag) {
+              setState(() {
+                _searchTag = tag;
+                showFavoritesView = false;
+                showSearchView = true;
+              });
+            },
           );
         } else if (imageList.isEmpty && isLoading) {
           bodyContent = const SakuraGridShimmer();
@@ -247,7 +267,7 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
                           _isPostDownloaded(postId);
 
                       return GestureDetector(
-                        onTap: () {
+                        onTap: () async {
                           if (hasChildren) {
                             Navigator.push(
                               context,
@@ -257,7 +277,7 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
                             );
                             return;
                           }
-                          Navigator.push(
+                          final tag = await Navigator.push<String>(
                             context,
                             MaterialPageRoute(
                               builder: (context) => WindowsFullImageScreen(
@@ -265,6 +285,13 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
                               ),
                             ),
                           );
+                          if (tag != null && tag.isNotEmpty && mounted) {
+                            setState(() {
+                              _searchTag = tag;
+                              showFavoritesView = false;
+                              showSearchView = true;
+                            });
+                          }
                         },
                         child: Card(
                           clipBehavior: Clip.antiAlias,
@@ -451,40 +478,133 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
           builder: (context, siteConfig, child) {
             return Scaffold(
               appBar: AppBar(
-                title: const Text('SakuraView'),
+                title: Text(
+                  showSearchView
+                      ? 'Search'
+                      : showFavoritesView
+                          ? 'Favorites'
+                          : 'SakuraView',
+                ),
                 actions: [
-                  Container(
-                    margin: const EdgeInsets.only(right: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withAlpha(40),
-                      borderRadius: BorderRadius.circular(20),
+                  IconButton(
+                    icon: Icon(
+                      !showSearchView && !showFavoritesView
+                          ? Icons.home
+                          : Icons.home_outlined,
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.cloud, size: 16, color: Colors.white70),
-                        const SizedBox(width: 4),
-                        Text(
-                          siteConfig.config.site.displayName,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.white70,
+                    tooltip: 'Home',
+                    onPressed: () {
+                      setState(() {
+                        showSearchView = false;
+                        showFavoritesView = false;
+                      });
+                      if (imageList.isEmpty) fetchImages(clear: true);
+                    },
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      showSearchView ? Icons.search : Icons.search_outlined,
+                    ),
+                    tooltip: 'Search',
+                    onPressed: () {
+                      setState(() {
+                        _searchTag = null;
+                        showFavoritesView = false;
+                        showSearchView = true;
+                      });
+                    },
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      showFavoritesView
+                          ? Icons.favorite
+                          : Icons.favorite_outline,
+                    ),
+                    tooltip: 'Favorites',
+                    onPressed: () {
+                      setState(() {
+                        showSearchView = false;
+                        showFavoritesView = true;
+                      });
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.download_outlined),
+                    tooltip: 'Downloads',
+                    onPressed: () => Navigator.pushNamed(context, '/downloads'),
+                  ),
+                  PopupMenuButton<ImageSite>(
+                    tooltip: 'Switch Image Site',
+                    onSelected: handleSiteChanged,
+                    itemBuilder: (ctx) => ImageSite.values
+                        .map((s) => PopupMenuItem<ImageSite>(
+                              value: s,
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    s == siteConfig.config.site
+                                        ? Icons.radio_button_checked
+                                        : Icons.radio_button_off,
+                                    size: 18,
+                                    color: Theme.of(context).colorScheme.primary,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(s.displayName),
+                                ],
+                              ),
+                            ))
+                        .toList(),
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 12, left: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primaryContainer
+                            .withAlpha(180),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.cloud,
+                            size: 15,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onPrimaryContainer,
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 5),
+                          Text(
+                            siteConfig.config.site.displayName,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onPrimaryContainer,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
               ),
               drawer: AppDrawer(
-                isSafeMode: true,
+                isSafeMode: siteConfig.config.safeMode,
                 onSafeModeChanged: handleSafeModeChanged,
+                onSiteChanged: handleSiteChanged,
                 onHomeTapped: handleHomeTapped,
                 onFavoritesTapped: handleFavoritesTapped,
                 onDownloadsTapped: handleDownloadsTapped,
                 onSettingsTapped: handleSettingsTapped,
                 onSearchTapped: () {
+                  setState(() {
+                    showFavoritesView = false;
+                    showSearchView = true;
+                  });
                   Navigator.pop(context);
                 },
                 onHistoryTapped: () {
@@ -508,7 +628,13 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
 
 class FavoriteDisplayWidget extends StatelessWidget {
   final List<Map<String, dynamic>> favoriteItems;
-  const FavoriteDisplayWidget({super.key, required this.favoriteItems});
+  final ValueChanged<String>? onTagSelected;
+
+  const FavoriteDisplayWidget({
+    super.key,
+    required this.favoriteItems,
+    this.onTagSelected,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -556,7 +682,7 @@ class FavoriteDisplayWidget extends StatelessWidget {
               borderRadius: BorderRadius.circular(14.0),
             ),
             child: InkWell(
-              onTap: () {
+              onTap: () async {
                 final hasChildren =
                     item['has_children'] as bool? ?? false;
                 if (hasChildren) {
@@ -568,13 +694,16 @@ class FavoriteDisplayWidget extends StatelessWidget {
                   );
                   return;
                 }
-                Navigator.push(
+                final tag = await Navigator.push<String>(
                   context,
                   MaterialPageRoute(
                     builder: (context) =>
                         WindowsFullImageScreen(postData: item),
                   ),
                 );
+                if (tag != null && tag.isNotEmpty) {
+                  onTagSelected?.call(tag);
+                }
               },
               child: AspectRatio(
                 aspectRatio: aspectRatio,

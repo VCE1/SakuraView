@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:vce1_sakuraview/api/yande_api.dart';
 import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
 import 'package:vce1_sakuraview/providers/favorites_notifier.dart';
+import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
 
 class FormatUtils {
@@ -88,8 +89,35 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
   void initState() {
     super.initState();
     _loadPreview();
-    if (widget.postData['has_children'] == true && !_isLocal && _postId != 0) {
-      _fetchChildren();
+    if (!_isLocal && _postId != 0) {
+      _resolveFullDetailIfNeeded();
+      if (widget.postData['has_children'] == true) {
+        _fetchChildren();
+      }
+    }
+  }
+
+  Future<void> _resolveFullDetailIfNeeded() async {
+    final fileUrl = widget.postData['file_url'] as String? ?? '';
+    if (!fileUrl.contains('zerochan.net/600/')) return;
+    try {
+      final apiClient = context.read<SiteConfigProvider>().apiClient;
+      final detail = await apiClient.getPostDetail(_postId.toString());
+      if (detail != null && mounted) {
+        setState(() {
+          if (detail.fileUrl != null && detail.fileUrl!.isNotEmpty) {
+            widget.postData['file_url'] = detail.fileUrl;
+          }
+          if (detail.fileSize != null && detail.fileSize! > 0) {
+            widget.postData['file_size'] = detail.fileSize;
+          }
+          if (detail.fileExt != null && detail.fileExt!.isNotEmpty) {
+            widget.postData['file_ext'] = detail.fileExt;
+          }
+        });
+      }
+    } catch (e) {
+      _log.fine('Detail upgrade skipped: $e');
     }
   }
 
@@ -119,7 +147,11 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
   Future<void> _fetchChildren() async {
     setState(() => _loadingChildren = true);
     try {
-      final children = await YandeApi.fetchChildPosts(_postId);
+      final apiClient = context.read<SiteConfigProvider>().apiClient;
+      var children = await apiClient.fetchChildPosts(_postId);
+      if (children.isEmpty) {
+        children = await YandeApi.fetchChildPosts(_postId);
+      }
       if (mounted) setState(() => _childPosts = children);
     } catch (e) {
       _log.severe('fetch children: $e');

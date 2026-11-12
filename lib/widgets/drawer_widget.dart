@@ -7,6 +7,7 @@ import 'package:vce1_sakuraview/models/site_config.dart';
 class AppDrawer extends StatefulWidget {
   final bool isSafeMode;
   final Function(bool) onSafeModeChanged;
+  final ValueChanged<ImageSite>? onSiteChanged;
   final Function() onHomeTapped;
   final Function() onFavoritesTapped;
   final Function() onDownloadsTapped;
@@ -21,6 +22,7 @@ class AppDrawer extends StatefulWidget {
     required this.isSafeMode,
     required this.onHomeTapped,
     required this.onSafeModeChanged,
+    this.onSiteChanged,
     required this.onFavoritesTapped,
     required this.onDownloadsTapped,
     required this.onSearchTapped,
@@ -139,7 +141,11 @@ class _AppDrawerState extends State<AppDrawer> {
                             onChanged: (value) {
                               if (value != null) {
                                 Navigator.pop(context);
-                                siteConfig.setSite(value);
+                                if (widget.onSiteChanged != null) {
+                                  widget.onSiteChanged!(value);
+                                } else {
+                                  siteConfig.setSite(value);
+                                }
                               }
                             },
                             child: Column(

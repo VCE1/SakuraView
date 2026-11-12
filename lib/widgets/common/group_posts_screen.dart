@@ -4,7 +4,9 @@ import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:logging/logging.dart';
 
+import 'package:provider/provider.dart';
 import 'package:vce1_sakuraview/api/yande_api.dart';
+import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/widgets/android/android_full_image_screen.dart';
 import 'package:vce1_sakuraview/widgets/windows/window_full_image_screen.dart';
 import 'dart:io' show Platform;
@@ -42,7 +44,13 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
 
   Future<void> _fetchChildren() async {
     try {
-      final children = await YandeApi.fetchChildPosts(_postId);
+      List<Map<String, dynamic>> children;
+      if (mounted) {
+        final siteProvider = Provider.of<SiteConfigProvider>(context, listen: false);
+        children = await siteProvider.apiClient.fetchChildPosts(_postId);
+      } else {
+        children = await YandeApi.fetchChildPosts(_postId);
+      }
       if (mounted) {
         setState(() {
           _allPosts = [widget.parentPost, ...children];

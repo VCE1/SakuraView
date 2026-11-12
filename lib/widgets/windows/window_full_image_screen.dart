@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 import 'package:vce1_sakuraview/api/yande_api.dart';
 import 'package:vce1_sakuraview/providers/favorites_notifier.dart';
 import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
+import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
 
 class UserUtils {
@@ -152,10 +153,37 @@ class _WindowsFullImageScreenState extends State<WindowsFullImageScreen> {
       }
     }
 
-    if (_hasChildren && !_isLocalFile && _postId != 0) {
-      _fetchChildPosts();
+    if (!_isLocalFile && _postId != 0) {
+      _resolveFullDetailIfNeeded();
+      if (_hasChildren) {
+        _fetchChildPosts();
+      }
     }
     _scrollController.addListener(_contentScrollListener);
+  }
+
+  Future<void> _resolveFullDetailIfNeeded() async {
+    final fileUrl = widget.postData['file_url'] as String? ?? '';
+    if (!fileUrl.contains('zerochan.net/600/')) return;
+    try {
+      final apiClient = Provider.of<SiteConfigProvider>(context, listen: false).apiClient;
+      final detail = await apiClient.getPostDetail(_postId.toString());
+      if (detail != null && mounted) {
+        setState(() {
+          if (detail.fileUrl != null && detail.fileUrl!.isNotEmpty) {
+            widget.postData['file_url'] = detail.fileUrl;
+          }
+          if (detail.fileSize != null && detail.fileSize! > 0) {
+            widget.postData['file_size'] = detail.fileSize;
+          }
+          if (detail.fileExt != null && detail.fileExt!.isNotEmpty) {
+            widget.postData['file_ext'] = detail.fileExt;
+          }
+        });
+      }
+    } catch (e) {
+      _logger.fine('Detail upgrade skipped: $e');
+    }
   }
 
   @override
@@ -266,7 +294,11 @@ class _WindowsFullImageScreenState extends State<WindowsFullImageScreen> {
     if (!mounted) return;
     setState(() => _isLoadingChildPosts = true);
     try {
-      final children = await YandeApi.fetchChildPosts(_postId);
+      final apiClient = Provider.of<SiteConfigProvider>(context, listen: false).apiClient;
+      var children = await apiClient.fetchChildPosts(_postId);
+      if (children.isEmpty) {
+        children = await YandeApi.fetchChildPosts(_postId);
+      }
       if (mounted) {
         setState(() {
           _childPosts = children;
@@ -837,7 +869,7 @@ class _WindowsFullImageScreenState extends State<WindowsFullImageScreen> {
                                       spacing: 6.0,
                                       runSpacing: 4.0,
                                       children: tags
-                                          .map((tag) => Chip(
+                                          .map((tag) => ActionChip(
                                                 label: Text(tag,
                                                     style: const TextStyle(
                                                         fontSize: 11)),
@@ -854,6 +886,8 @@ class _WindowsFullImageScreenState extends State<WindowsFullImageScreen> {
                                                         context)
                                                     .colorScheme
                                                     .surfaceContainerHighest,
+                                                onPressed: () =>
+                                                    Navigator.pop(context, tag),
                                               ))
                                           .toList(),
                                     )

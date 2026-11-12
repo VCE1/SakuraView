@@ -15,7 +15,7 @@ class YandereApiClient extends ImageApiClient {
   @override
   Map<String, String> get headers => {
         'Content-Type': 'application/json',
-        'User-Agent': 'vce1.sakuraview/1.0',
+        'User-Agent': 'vce1.sakuraview/1.1 (vce1)',
       };
 
   @override
@@ -24,11 +24,21 @@ class YandereApiClient extends ImageApiClient {
     int page = 1,
     int limit = 20,
     String? sort,
+    bool safeMode = false,
   }) async {
+    final tagParts = <String>[];
+    if (tags != null && tags.trim().isNotEmpty) {
+      tagParts.add(tags.trim());
+    }
+    if (safeMode && !tagParts.any((t) => t.contains('rating:'))) {
+      tagParts.add('rating:s');
+    }
+    final effectiveTags = tagParts.join(' ');
+
     final queryParams = <String, String>{
       'limit': '$limit',
       'page': '$page',
-      if (tags != null && tags.isNotEmpty) 'tags': tags,
+      if (effectiveTags.isNotEmpty) 'tags': effectiveTags,
     };
 
     final uri = buildUri('/post.json', queryParams);
@@ -106,14 +116,15 @@ class YandereApiClient extends ImageApiClient {
 
   @override
   PostHiveModel parsePost(Map<String, dynamic> json) {
+    final rawTags = json['tags'] as String? ?? '';
     return PostHiveModel()
       ..id = resolveInt(json['id']) ?? 0
-      ..tags = normalizeTags(json['tags'] as String?)
+      ..tags = rawTags.trim()
       ..author = json['author'] as String? ?? 'unknown'
       ..creatorId = resolveInt(json['creator_id'])
       ..source = json['source'] as String? ?? ''
       ..fileSize = resolveInt(json['file_size'])
-      ..createdAt = resolveInt(json['created_at'])
+      ..createdAt = resolveTimestamp(json['created_at'])
       ..rating = json['rating'] as String? ?? 's'
       ..score = resolveScore(json['score'])
       ..width = resolveInt(json['width']) ?? 0
@@ -129,7 +140,9 @@ class YandereApiClient extends ImageApiClient {
   }
 
   String _extFromUrl(String url) {
-    final uri = Uri.parse(url);
+    if (url.isEmpty) return 'jpg';
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.pathSegments.isEmpty) return 'jpg';
     final ext = uri.pathSegments.last.split('.').lastOrNull;
     if (ext != null && ext.length <= 5) return ext;
     return 'jpg';

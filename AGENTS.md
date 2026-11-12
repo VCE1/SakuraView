@@ -121,8 +121,10 @@ ApiClientFactory                    ← creates ImageApiClient by site
 - `pubspec.yaml` — removed `webview_flutter`
 
 ## Pending Tasks
-- [ ] Per-site API key/username config in drawer (low priority)
-- [ ] Zerochan/Danbooru proxy may still fail — need to verify `parsePost` robustness (added per-post try-catch + `resolveScore`)
+- [x] Per-site API key/username config in settings (`SettingsPage` → `Site Account & API Key`)
+- [x] Danbooru API v2 top-level + `media_asset.variants` & ISO-8601 timestamp parsing
+- [x] Zerochan `www.zerochan.net` host, tolerant JSON wrapper extraction, `List` tags & JPEG preview/sample derivation
+- [x] Safe mode tag filtering (`rating:s` / `rating:general`), Drawer site switch callback, and Windows Search & tag click navigation
 
 ## Session 7 — Lint zero, API hardening, Group posts, Modern loaders, Android upgrades
 

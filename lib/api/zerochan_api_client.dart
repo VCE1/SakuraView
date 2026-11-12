@@ -14,15 +14,80 @@ class ZerochanApiClient extends ImageApiClient {
 
   @override
   Map<String, String> get headers => {
-        'Content-Type': 'application/json',
         'Accept': 'application/json',
         'User-Agent':
-            username.isNotEmpty ? 'vce1.sakuraview/1.0 ($username)' : 'vce1.sakuraview/1.0',
+            'SakuraView - ${username.isNotEmpty ? username : "vce1"}',
         if (apiKey.isNotEmpty) 'Authorization': 'Bearer $apiKey',
       };
 
   String _encodeTags(String tags) {
-    return tags.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).join(',');
+    if (tags.contains(',')) {
+      return tags
+          .split(',')
+          .map((t) => t.trim().replaceAll('_', ' '))
+          .where((t) => t.isNotEmpty)
+          .join(',');
+    }
+    return tags
+        .split(RegExp(r'\s+'))
+        .where((t) => t.isNotEmpty)
+        .map((t) => t.replaceAll('_', ' '))
+        .join(',');
+  }
+
+  /// Extracts valid JSON object from Zerochan response body even when Zerochan's
+  /// server prepends an extra `{` and appends HTML `<p id="browse-filters"...`.
+  static Map<String, dynamic>? extractZerochanJson(String rawBody) {
+    final trimmed = rawBody.trim();
+    if (trimmed.isEmpty) return null;
+
+    try {
+      final decoded = json.decode(trimmed);
+      if (decoded is Map<String, dynamic>) return decoded;
+    } catch (_) {
+      // Fall through to tolerant extraction for Zerochan's malformed wrapper
+    }
+
+    final itemsKeyIdx = trimmed.indexOf('"items"');
+    if (itemsKeyIdx != -1) {
+      final startBrace = trimmed.lastIndexOf('{', itemsKeyIdx);
+      if (startBrace != -1) {
+        int depth = 0;
+        bool inString = false;
+        bool escaped = false;
+        for (int i = startBrace; i < trimmed.length; i++) {
+          final ch = trimmed.codeUnitAt(i);
+          if (escaped) {
+            escaped = false;
+            continue;
+          }
+          if (ch == 0x5C /* \ */) {
+            escaped = true;
+            continue;
+          }
+          if (ch == 0x22 /* " */) {
+            inString = !inString;
+            continue;
+          }
+          if (!inString) {
+            if (ch == 0x7B /* { */) {
+              depth++;
+            } else if (ch == 0x7D /* } */) {
+              depth--;
+              if (depth == 0) {
+                final candidate = trimmed.substring(startBrace, i + 1);
+                try {
+                  final decoded = json.decode(candidate);
+                  if (decoded is Map<String, dynamic>) return decoded;
+                } catch (_) {}
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+    return null;
   }
 
   @override
@@ -31,29 +96,33 @@ class ZerochanApiClient extends ImageApiClient {
     int page = 1,
     int limit = 20,
     String? sort,
+    bool safeMode = false,
   }) async {
     final base = Uri.parse(site.apiBaseUrl);
     final tagPath =
-        tags != null && tags.isNotEmpty ? '/${_encodeTags(tags)}' : '/';
+        tags != null && tags.trim().isNotEmpty ? '/${_encodeTags(tags.trim())}' : '/';
     final qParams = <String, String>{
       'json': '',
       'p': '$page',
       'l': '$limit',
-      if (sort == 'fav') 's': 'fav',
+      's': sort == 'fav' ? 'fav' : 'id',
     };
     final uri = base.replace(path: tagPath, queryParameters: qParams);
     _logger.info('Zerochan search: $uri');
 
     try {
       final response = await httpGet(uri);
-      if (response.statusCode != 200) {
-        throw ApiException(
-          'Zerochan returned ${response.statusCode}',
-          statusCode: response.statusCode,
-        );
+      final data = extractZerochanJson(response.body);
+      if (data == null) {
+        if (response.statusCode != 200) {
+          throw ApiException(
+            'Zerochan returned ${response.statusCode}',
+            statusCode: response.statusCode,
+          );
+        }
+        return [];
       }
-      final Map<String, dynamic> data = json.decode(response.body);
-      final List<dynamic> items = data['items'] ?? [];
+      final List<dynamic> items = data['items'] as List<dynamic>? ?? [];
       final posts = <PostHiveModel>[];
       for (final item in items) {
         if (item is! Map<String, dynamic>) continue;
@@ -67,8 +136,8 @@ class ZerochanApiClient extends ImageApiClient {
       return posts;
     } on http.ClientException catch (e) {
       throw ApiException('Network error: ${e.message}', originalError: e);
-    } on FormatException catch (e) {
-      throw ApiException('Invalid response data', originalError: e);
+    } on ApiException {
+      rethrow;
     } catch (e) {
       throw ApiException('Failed to fetch posts', originalError: e);
     }
@@ -98,50 +167,94 @@ class ZerochanApiClient extends ImageApiClient {
   @override
   Future<List<String>> searchTags(String query) async {
     final base = Uri.parse(site.apiBaseUrl);
-    final uri = base.replace(path: '/suggest', queryParameters: {'q': query});
+    final uri = base.replace(
+      path: '/suggest',
+      queryParameters: {'q': query, 'json': ''},
+    );
     _logger.info('Zerochan tag search: $uri');
 
     try {
       final response = await httpGet(uri);
       if (response.statusCode != 200) return [];
       final List<dynamic> data = json.decode(response.body);
-      return data.map((item) => item['name'] as String? ?? '').toList();
+      return data
+          .map((item) => item['value'] as String? ?? item['name'] as String? ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
     } catch (e) {
       _logger.warning('Zerochan tag search failed: $e');
       return [];
     }
   }
 
+  static String _toJpgThumb(String url) {
+    if (url.endsWith('.avif') || url.endsWith('.webp')) {
+      final dot = url.lastIndexOf('.');
+      return '${url.substring(0, dot)}.jpg';
+    }
+    return url;
+  }
+
+  static String _deriveSampleFromThumb(String thumbUrl) {
+    if (thumbUrl.isEmpty) return '';
+    final jpgUrl = _toJpgThumb(thumbUrl);
+    return jpgUrl
+        .replaceFirst('://s3.zerochan.net/', '://s1.zerochan.net/')
+        .replaceFirst('/240/', '/600/');
+  }
+
   @override
   PostHiveModel parsePost(Map<String, dynamic> json) {
-    final full = json['full'] as String? ?? '';
-    final thumbnail = json['thumb'] as String? ?? '';
-    final src = json['src'] as String? ?? full;
+    final rawThumb = resolveUrl(json, ['thumb', 'thumbnail', 'medium', 'small']) ?? '';
+    final preview = _toJpgThumb(rawThumb);
+    final large = resolveUrl(json, ['large']) ?? _deriveSampleFromThumb(rawThumb);
+    final full = resolveUrl(json, ['full', 'src']) ?? '';
+
+    String resolvedTags = '';
+    final rawTags = json['tags'];
+    if (rawTags is List) {
+      resolvedTags = rawTags
+          .whereType<String>()
+          .map((t) => t.trim().replaceAll(RegExp(r'\s+'), '_'))
+          .where((t) => t.isNotEmpty)
+          .join(' ');
+    } else if (rawTags is String) {
+      resolvedTags = normalizeTags(rawTags);
+    }
+
+    final primaryTag = (json['primary'] as String?) ?? (json['tag'] as String?) ?? '';
+    final uploader = (json['uploader'] as String?) ??
+        (json['user'] as String?) ??
+        (primaryTag.isNotEmpty ? primaryTag : 'unknown');
+
+    final resolvedSample = large.isNotEmpty ? large : (full.isNotEmpty ? full : preview);
+    final resolvedFile = full.isNotEmpty ? full : resolvedSample;
 
     return PostHiveModel()
       ..id = resolveInt(json['id']) ?? 0
-      ..tags = normalizeTags(json['tags'] as String?)
-      ..author = json['uploader'] as String? ?? json['user'] as String? ?? 'unknown'
+      ..tags = resolvedTags
+      ..author = uploader
       ..creatorId = resolveInt(json['uploader_id']) ?? resolveInt(json['user_id'])
       ..source = json['source'] as String? ?? ''
-      ..fileSize = resolveInt(json['file_size'])
-      ..createdAt = resolveInt(json['created'])
-      ..rating = (json['content'] as String? ?? 'Image').toLowerCase().startsWith('safe')
+      ..fileSize = resolveInt(json['file_size']) ?? resolveInt(json['size'])
+      ..createdAt = resolveTimestamp(json['created']) ?? resolveTimestamp(json['created_at'])
+      ..rating = (json['content'] as String? ?? 'Safe').toLowerCase().startsWith('safe')
           ? 's'
           : 'q'
       ..score = resolveScore(json['score'])
       ..width = resolveInt(json['width']) ?? 0
       ..height = resolveInt(json['height']) ?? 0
-      ..previewUrl = thumbnail.isEmpty ? full : thumbnail
-      ..sampleUrl = full.isEmpty ? thumbnail : full
-      ..fileUrl = src.isEmpty ? full : src
-      ..fileExt = json['extension'] as String? ?? _extFromUrl(src.isNotEmpty ? src : full)
+      ..previewUrl = preview.isNotEmpty ? preview : resolvedSample
+      ..sampleUrl = resolvedSample
+      ..fileUrl = resolvedFile
+      ..fileExt = json['extension'] as String? ?? _extFromUrl(resolvedFile)
       ..hasChildren = resolveBool(json['has_children']);
   }
 
   String _extFromUrl(String url) {
     if (url.isEmpty) return 'jpg';
-    final uri = Uri.parse(url);
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.pathSegments.isEmpty) return 'jpg';
     final ext = uri.pathSegments.last.split('.').lastOrNull;
     if (ext != null && ext.length <= 5) return ext;
     return 'jpg';

@@ -4,13 +4,20 @@ import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
+import 'package:vce1_sakuraview/api/zerochan_api_client.dart';
 import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
 import 'package:vce1_sakuraview/models/post_hive_model.dart';
 import 'package:vce1_sakuraview/utils/settings_service.dart';
 
 class WindowsDownloadNotifier extends BaseDownloadNotifier {
   final Logger _logger = Logger('WindowsDownloadNotifier');
-  final Dio _dio = Dio();
+  final Dio _dio = Dio(
+    BaseOptions(
+      headers: {
+        'User-Agent': 'vce1.sakuraview/1.1 (vce1)',
+      },
+    ),
+  );
   final List<AppDownloadTask> _tasks = [];
   List<DownloadedItem> _downloadedItems = [];
   late Box<PostHiveModel> _postBox;
@@ -35,8 +42,26 @@ class WindowsDownloadNotifier extends BaseDownloadNotifier {
 
   @override
   Future<EnqueueResult> enqueueDownload(Map<String, dynamic> postData) async {
-    final url = postData['file_url'] as String? ?? '';
+    var url = postData['file_url'] as String? ?? '';
     if (url.isEmpty) return EnqueueResult.failed;
+
+    if (url.contains('zerochan.net/600/') && postData['id'] != null) {
+      try {
+        final detail = await ZerochanApiClient()
+            .getPostDetail(postData['id'].toString());
+        if (detail != null &&
+            detail.fileUrl != null &&
+            detail.fileUrl!.isNotEmpty) {
+          url = detail.fileUrl!;
+          postData['file_url'] = url;
+          if (detail.fileExt != null && detail.fileExt!.isNotEmpty) {
+            postData['file_ext'] = detail.fileExt;
+          }
+        }
+      } catch (e) {
+        _logger.fine('Zerochan detail fetch before download skipped: $e');
+      }
+    }
 
     if (_tasks.any((task) => task.postData['id'] == postData['id'])) {
       return EnqueueResult.alreadyInQueue;
@@ -259,4 +284,3 @@ class WindowsDownloadNotifier extends BaseDownloadNotifier {
     super.dispose();
   }
 }
-

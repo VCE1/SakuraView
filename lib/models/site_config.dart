@@ -19,7 +19,7 @@ extension ImageSiteExtension on ImageSite {
       case ImageSite.yandere:
         return 'https://yande.re';
       case ImageSite.zerochan:
-        return 'https://zerochan.net';
+        return 'https://www.zerochan.net';
     }
   }
 
