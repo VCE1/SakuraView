@@ -1,15 +1,16 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
-import 'package:shimmer/shimmer.dart';
 import 'package:logging/logging.dart';
-
 import 'package:provider/provider.dart';
+
 import 'package:vce1_sakuraview/api/yande_api.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/widgets/android/android_full_image_screen.dart';
 import 'package:vce1_sakuraview/widgets/windows/window_full_image_screen.dart';
-import 'dart:io' show Platform;
+import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
 
 class GroupPostsScreen extends StatefulWidget {
   final Map<String, dynamic> parentPost;
@@ -46,7 +47,8 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
     try {
       List<Map<String, dynamic>> children;
       if (mounted) {
-        final siteProvider = Provider.of<SiteConfigProvider>(context, listen: false);
+        final siteProvider =
+            Provider.of<SiteConfigProvider>(context, listen: false);
         children = await siteProvider.apiClient.fetchChildPosts(_postId);
       } else {
         children = await YandeApi.fetchChildPosts(_postId);
@@ -69,14 +71,16 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
         : AndroidFullImageScreen(postData: postData);
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => screen),
+      SakuraPageRoute(builder: (_) => screen),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final parentTags =
-        (widget.parentPost['tags'] as String? ?? '').split(' ').where((t) => t.isNotEmpty).toList();
+    final parentTags = (widget.parentPost['tags'] as String? ?? '')
+        .split(' ')
+        .where((t) => t.isNotEmpty)
+        .toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -85,17 +89,19 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
         elevation: 0,
       ),
       body: _isLoading
-          ? const Center(child: _ShimmerLoader())
+          ? const SakuraGridShimmer()
           : _allPosts.length <= 1
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.collections_outlined, size: 64, color: Colors.grey[400]),
+                      Icon(Icons.collections_outlined,
+                          size: 64, color: Colors.grey[400]),
                       const SizedBox(height: 12),
                       Text(
                         'No variants found',
-                        style: TextStyle(color: Colors.grey[500], fontSize: 16),
+                        style:
+                            TextStyle(color: Colors.grey[500], fontSize: 16),
                       ),
                     ],
                   ),
@@ -111,10 +117,13 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
                           runSpacing: 6,
                           children: parentTags
                               .map((t) => Chip(
-                                    label: Text(t, style: const TextStyle(fontSize: 11)),
-                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    label: Text(t,
+                                        style: const TextStyle(fontSize: 11)),
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
                                     visualDensity: VisualDensity.compact,
-                                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 4),
                                   ))
                               .toList(),
                         ),
@@ -124,7 +133,10 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
                       child: Text(
                         '${_allPosts.length} variants',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(context).colorScheme.onSurface.withAlpha(150),
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withAlpha(150),
                             ),
                       ),
                     ),
@@ -134,17 +146,22 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
                         child: MasonryGridView.count(
                           controller: _scrollController,
                           crossAxisCount:
-                              (MediaQuery.of(context).size.width / 160).floor().clamp(2, 6),
+                              (MediaQuery.of(context).size.width / 160)
+                                  .floor()
+                                  .clamp(2, 7),
                           mainAxisSpacing: 8,
                           crossAxisSpacing: 8,
                           itemCount: _allPosts.length,
                           itemBuilder: (context, index) {
                             final post = _allPosts[index];
-                            final num w =
-                                post['width'] as num? ?? post['sample_width'] as num? ?? 1;
-                            final num h =
-                                post['height'] as num? ?? post['sample_height'] as num? ?? 1;
-                            final double aspect = (w <= 0 || h <= 0) ? 1.0 : w / h;
+                            final num w = post['width'] as num? ??
+                                post['sample_width'] as num? ??
+                                1;
+                            final num h = post['height'] as num? ??
+                                post['sample_height'] as num? ??
+                                1;
+                            final double aspect =
+                                (w <= 0 || h <= 0) ? 1.0 : w / h;
                             final bool isParent = index == 0;
 
                             return GestureDetector(
@@ -160,21 +177,12 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
                                   child: Stack(
                                     fit: StackFit.expand,
                                     children: [
-                                      CachedNetworkImage(
-                                        imageUrl: post['preview_url'] as String? ??
+                                      SakuraAnimatedImage(
+                                        imageUrl: post['preview_url']
+                                                as String? ??
                                             post['sample_url'] as String? ??
                                             '',
                                         fit: BoxFit.cover,
-                                        placeholder: (_, __) => Shimmer.fromColors(
-                                          baseColor: Colors.grey[300]!,
-                                          highlightColor: Colors.grey[100]!,
-                                          child: Container(color: Colors.white),
-                                        ),
-                                        errorWidget: (_, __, ___) => Container(
-                                          color: Colors.grey[200],
-                                          child: const Icon(Icons.broken_image,
-                                              color: Colors.grey),
-                                        ),
                                       ),
                                       if (isParent)
                                         Positioned(
@@ -188,7 +196,8 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
                                                   .colorScheme
                                                   .primary
                                                   .withAlpha(200),
-                                              borderRadius: BorderRadius.circular(8),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
                                             ),
                                             child: const Text(
                                               'Parent',
@@ -210,40 +219,6 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
                     ),
                   ],
                 ),
-    );
-  }
-}
-
-class _ShimmerLoader extends StatelessWidget {
-  const _ShimmerLoader();
-
-  @override
-  Widget build(BuildContext context) {
-    return Shimmer.fromColors(
-      baseColor: Colors.grey[300]!,
-      highlightColor: Colors.grey[100]!,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Container(
-            width: 120,
-            height: 14,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(7),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:vce1_sakuraview/utils/favorites.dart';
 
 class FavoritesNotifier extends ChangeNotifier {

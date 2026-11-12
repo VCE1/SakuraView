@@ -1,9 +1,8 @@
-﻿import 'dart:ui' as ui;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:provider/provider.dart';
-import 'package:shimmer/shimmer.dart';
 import 'package:logging/logging.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
@@ -18,6 +17,9 @@ import 'package:vce1_sakuraview/models/site_config.dart';
 import 'package:vce1_sakuraview/pages/search_page.dart';
 import 'package:vce1_sakuraview/widgets/common/group_posts_screen.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
+import 'package:vce1_sakuraview/widgets/common/telegram_floating_nav_bar.dart';
 
 class AndroidImageGridPage extends StatefulWidget {
   const AndroidImageGridPage({super.key});
@@ -35,6 +37,8 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
   bool isLoading = false;
   bool _isDisposed = false;
   bool _hasMoreImages = true;
+  String? _lastError;
+  bool _navBarVisible = true;
 
   static final Logger _logger = Logger('AndroidImageGridPage');
   final ScrollController _scrollController = ScrollController();
@@ -65,10 +69,21 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
   }
 
   void _onScroll() {
-    if (showFavoritesView || isLoading || !_scrollController.hasClients) return;
+    if (!_scrollController.hasClients) return;
+
+    final direction = _scrollController.position.userScrollDirection;
+    if (direction == ScrollDirection.reverse && _navBarVisible) {
+      if (_scrollController.position.pixels > 80) {
+        setState(() => _navBarVisible = false);
+      }
+    } else if (direction == ScrollDirection.forward && !_navBarVisible) {
+      setState(() => _navBarVisible = true);
+    }
+
+    if (showFavoritesView || isLoading) return;
     final maxScroll = _scrollController.position.maxScrollExtent;
     final currentScroll = _scrollController.position.pixels;
-    if (currentScroll >= maxScroll && maxScroll > 0) {
+    if (currentScroll >= maxScroll - 240 && maxScroll > 0) {
       fetchImages();
     }
   }
@@ -79,11 +94,15 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
         imageList.clear();
         currentPage = 1;
         _hasMoreImages = true;
+        _lastError = null;
       });
     }
     if (isLoading || !mounted) return;
 
-    setState(() => isLoading = true);
+    setState(() {
+      isLoading = true;
+      if (clear) _lastError = null;
+    });
 
     try {
       final siteConfig = Provider.of<SiteConfigProvider>(context, listen: false);
@@ -105,18 +124,24 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
             currentPage++;
           }
           isLoading = false;
+          _lastError = null;
         });
       }
     } catch (e) {
       _logger.severe("Error fetching images: $e");
       if (!_isDisposed && mounted) {
+        final msg = e.toString().replaceFirst('ApiException: ', '');
         setState(() {
           isLoading = false;
           _hasMoreImages = false;
+          _lastError = msg;
         });
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: ${e.toString()}')),
+            SnackBar(
+              content: Text(msg),
+              behavior: SnackBarBehavior.floating,
+            ),
           );
         }
       }
@@ -140,6 +165,7 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
     setState(() {
       showFavoritesView = false;
       _currentTabIndex = 0;
+      _navBarVisible = true;
     });
     Navigator.pop(context);
     fetchImages(clear: true);
@@ -150,9 +176,9 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
     setState(() {
       showFavoritesView = true;
       _currentTabIndex = 2;
+      _navBarVisible = true;
     });
     Navigator.pop(context);
-    Provider.of<FavoritesNotifier>(context, listen: false);
   }
 
   void handleDownloadsTapped() {
@@ -164,7 +190,7 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
     Navigator.pop(context);
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (context) => const SettingsPage()),
+      SakuraPageRoute(builder: (context) => const SettingsPage()),
     );
   }
 
@@ -173,6 +199,7 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
+        behavior: SnackBarBehavior.floating,
         duration: const Duration(milliseconds: 1200),
       ),
     );
@@ -180,334 +207,330 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
 
   bool _isPostDownloaded(int postId) => _postBox.containsKey(postId);
 
+  int _calcColumns(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final width = media.size.width;
+    final isLandscape =
+        media.orientation == Orientation.landscape || width >= 640;
+    final targetTileWidth = isLandscape ? 168.0 : 175.0;
+    return (width / targetTileWidth).floor().clamp(2, 7);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final isLandscape =
+        media.orientation == Orientation.landscape || media.size.width >= 640;
+    final double appBarHeight = isLandscape ? 46.0 : 54.0;
+    final double topContentPadding = media.padding.top + appBarHeight + 6.0;
+    final double bottomContentPadding =
+        media.padding.bottom + (isLandscape ? 66.0 : 80.0);
+
     return Consumer<FavoritesNotifier>(
       builder: (context, favoritesNotifier, child) {
-        Widget bodyContent;
+        return Consumer<SiteConfigProvider>(
+          builder: (context, siteConfig, _) {
+            Widget bodyContent;
 
-        if (_currentTabIndex == 1) {
-          bodyContent = SearchPage(initialTag: _searchTag);
-        } else if (showFavoritesView) {
-          bodyContent = FavoriteDisplayWidget(
-            favoriteItems: favoritesNotifier.favoriteItems,
-          );
-        } else if (imageList.isEmpty && isLoading) {
-          bodyContent = const SakuraGridShimmer();
-        } else if (imageList.isEmpty && !isLoading) {
-          bodyContent = Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.cloud_off, size: 64, color: Colors.grey[400]),
-                const SizedBox(height: 10),
-                Text(
-                  'No images found.\nTry switching sites or check connection.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey[600]),
+            if (_currentTabIndex == 1) {
+              bodyContent = Padding(
+                key: const ValueKey<String>('tab_search'),
+                padding: EdgeInsets.only(
+                  top: topContentPadding,
+                  bottom: isLandscape ? 8 : 12,
                 ),
-                const SizedBox(height: 16),
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Retry'),
-                  onPressed: () => fetchImages(clear: true),
+                child: SearchPage(initialTag: _searchTag),
+              );
+            } else if (showFavoritesView) {
+              bodyContent = FavoriteDisplayWidget(
+                key: const ValueKey<String>('tab_favorites'),
+                favoriteItems: favoritesNotifier.favoriteItems,
+                topPadding: topContentPadding,
+                bottomPadding: bottomContentPadding,
+              );
+            } else if (imageList.isEmpty && isLoading) {
+              bodyContent = Padding(
+                key: ValueKey<String>('shimmer_${siteConfig.config.site.name}'),
+                padding: EdgeInsets.only(top: topContentPadding),
+                child: SakuraGridShimmer(
+                  columns: _calcColumns(context),
+                  rows: isLandscape ? 15 : 12,
                 ),
-              ],
-            ),
-          );
-        } else {
-          bodyContent = Consumer<BaseDownloadNotifier>(
-            builder: (context, downloadNotifier, child) {
-              return RefreshIndicator(
-                onRefresh: () => fetchImages(clear: true),
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: MasonryGridView.count(
-                    controller: _scrollController,
-                    crossAxisCount:
-                        (MediaQuery.of(context).size.width / 180)
-                            .floor()
-                            .clamp(2, 4),
-                    mainAxisSpacing: 8.0,
-                    crossAxisSpacing: 8.0,
-                    itemCount: imageList.length + (_hasMoreImages ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index == imageList.length) {
-                        return const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(16.0),
-                            child: SakuraLoader(size: 28),
-                          ),
-                        );
-                      }
-
-                      final item = imageList[index];
-                      final int postId = item['id'] as int? ?? 0;
-                      final isActuallyFavorite =
-                          favoritesNotifier.isFavorite(
-                        item['id']?.toString() ?? '',
-                      );
-                      final hasChildren =
-                          item['has_children'] as bool? ?? false;
-                      final num imgWidth =
-                          item['width'] as num? ?? item['sample_width'] as num? ?? 1;
-                      final num imgHeight =
-                          item['height'] as num? ?? item['sample_height'] as num? ?? 1;
-                      final double aspectRatio =
-                          (imgWidth <= 0 || imgHeight <= 0)
-                              ? 1.0
-                              : imgWidth / imgHeight;
-                      final bool isDownloaded =
-                          _isPostDownloaded(postId);
-
-                      return GestureDetector(
-                        onTap: () async {
-                          if (hasChildren) {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => GroupPostsScreen(parentPost: item),
-                              ),
-                            );
-                            return;
-                          }
-                          final tag = await Navigator.push<String>(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => AndroidFullImageScreen(
-                                postData: item,
-                              ),
+              );
+            } else if (imageList.isEmpty && !isLoading) {
+              bodyContent = _buildErrorOrEmptyView(siteConfig);
+            } else {
+              bodyContent = Consumer<BaseDownloadNotifier>(
+                key: ValueKey<String>('grid_${siteConfig.config.site.name}'),
+                builder: (context, downloadNotifier, child) {
+                  final cols = _calcColumns(context);
+                  return RefreshIndicator(
+                    edgeOffset: topContentPadding,
+                    onRefresh: () => fetchImages(clear: true),
+                    child: MasonryGridView.count(
+                      controller: _scrollController,
+                      padding: EdgeInsets.fromLTRB(
+                        isLandscape ? 12.0 : 8.0,
+                        topContentPadding,
+                        isLandscape ? 12.0 : 8.0,
+                        bottomContentPadding,
+                      ),
+                      crossAxisCount: cols,
+                      mainAxisSpacing: isLandscape ? 10.0 : 8.0,
+                      crossAxisSpacing: isLandscape ? 10.0 : 8.0,
+                      itemCount: imageList.length + (_hasMoreImages ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        if (index == imageList.length) {
+                          return const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(16.0),
+                              child: SakuraLoader(size: 28),
                             ),
                           );
-                          if (tag != null && tag.isNotEmpty) {
-                            setState(() {
-                              _searchTag = tag;
-                              _currentTabIndex = 1;
-                            });
-                          }
-                        },
-                        child: Card(
-                          clipBehavior: Clip.antiAlias,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14.0),
-                          ),
-                          elevation: 3,
-                          child: AspectRatio(
-                            aspectRatio: aspectRatio,
-                            child: Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                Positioned.fill(
-                                  child: ClipRRect(
-                                    borderRadius:
-                                        BorderRadius.circular(14.0),
-                                    child: CachedNetworkImage(
-                                      imageUrl: item['preview_url']
-                                              as String? ??
-                                          item['sample_url'] as String? ??
-                                          '',
-                                      filterQuality: FilterQuality.medium,
-                                      placeholder: (context, url) =>
-                                          Shimmer.fromColors(
-                                        baseColor: Colors.grey[200]!,
-                                        highlightColor: Colors.grey[100]!,
-                                        child: Container(
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                      errorWidget: (context, url, error) =>
-                                          Center(
-                                        child: Icon(
-                                          Icons.broken_image,
-                                          color: Colors.grey[300],
-                                          size: 40,
-                                        ),
-                                      ),
-                                      fit: BoxFit.cover,
-                                    ),
-                                  ),
+                        }
+
+                        final item = imageList[index];
+                        final int postId = item['id'] as int? ?? 0;
+                        final isActuallyFavorite = favoritesNotifier.isFavorite(
+                          item['id']?.toString() ?? '',
+                        );
+                        final hasChildren =
+                            item['has_children'] as bool? ?? false;
+                        final num imgWidth = item['width'] as num? ??
+                            item['sample_width'] as num? ??
+                            1;
+                        final num imgHeight = item['height'] as num? ??
+                            item['sample_height'] as num? ??
+                            1;
+                        final double aspectRatio =
+                            (imgWidth <= 0 || imgHeight <= 0)
+                                ? 1.0
+                                : (imgWidth / imgHeight).clamp(0.42, 2.4);
+                        final bool isDownloaded = _isPostDownloaded(postId);
+                        final String rating =
+                            (item['rating'] as String? ?? 's').toLowerCase();
+                        final String fileExt =
+                            (item['file_ext'] as String? ?? '').toLowerCase();
+
+                        return _SakuraPostGridTile(
+                          item: item,
+                          aspectRatio: aspectRatio,
+                          hasChildren: hasChildren,
+                          isFavorite: isActuallyFavorite,
+                          isDownloaded: isDownloaded,
+                          rating: rating,
+                          fileExt: fileExt,
+                          onTap: () async {
+                            if (hasChildren) {
+                              Navigator.push(
+                                context,
+                                SakuraPageRoute(
+                                  builder: (_) =>
+                                      GroupPostsScreen(parentPost: item),
                                 ),
-                                if (hasChildren)
-                                  Positioned(
-                                    top: 6,
-                                    left: 6,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 3,
-                                        horizontal: 6,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .secondary
-                                            .withAlpha(180),
-                                        borderRadius:
-                                            BorderRadius.circular(8.0),
-                                      ),
-                                      child: const Text(
-                                        'Group',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                Positioned(
-                                  bottom: 0,
-                                  left: 0,
-                                  right: 0,
-                                  child: Container(
-                                    decoration: const BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: Alignment.bottomCenter,
-                                        end: Alignment.topCenter,
-                                        colors: [
-                                          Colors.black87,
-                                          Colors.transparent,
-                                        ],
-                                      ),
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.end,
-                                      children: [
-                                        IconButton(
-                                          icon: Icon(
-                                            isActuallyFavorite
-                                                ? Icons.favorite
-                                                : Icons.favorite_border,
-                                            color: isActuallyFavorite
-                                                ? Colors.pinkAccent
-                                                : Colors.white,
-                                          ),
-                                          iconSize: 20,
-                                          visualDensity:
-                                              VisualDensity.compact,
-                                          onPressed: () =>
-                                              favoritesNotifier
-                                                  .toggleFavorite(item),
-                                        ),
-                                        IconButton(
-                                          icon: Icon(
-                                            isDownloaded
-                                                ? Icons.download_done
-                                                : Icons.download_outlined,
-                                            color: isDownloaded
-                                                ? Colors.greenAccent
-                                                : Colors.white,
-                                          ),
-                                          iconSize: 20,
-                                          visualDensity:
-                                              VisualDensity.compact,
-                                          tooltip: isDownloaded
-                                              ? 'Downloaded'
-                                              : 'Download',
-                                          onPressed: () async {
-                                            if (_processingDownloads
-                                                .contains(postId)) { return; }
-                                            if (_isPostDownloaded(postId)) {
-                                              _showSnackbar(
-                                                  'Already downloaded');
-                                              return;
-                                            }
-                                            try {
-                                              _processingDownloads
-                                                  .add(postId);
-                                              final result =
-                                                  await downloadNotifier
-                                                      .enqueueDownload(item);
-                                              if (context.mounted) {
-                                                String message;
-                                                switch (result) {
-                                                  case EnqueueResult.success:
-                                                    message =
-                                                        'Added to download queue';
-                                                    break;
-                                                  case EnqueueResult
-                                                        .alreadyDownloaded:
-                                                    message =
-                                                        'Already downloaded';
-                                                    break;
-                                                  case EnqueueResult
-                                                        .alreadyInQueue:
-                                                    message =
-                                                        'Already in queue';
-                                                    break;
-                                                  case EnqueueResult.failed:
-                                                    message =
-                                                        'Download failed';
-                                                    break;
-                                                }
-                                                _showSnackbar(message);
-                                              }
-                                            } finally {
-                                              _processingDownloads
-                                                  .remove(postId);
-                                            }
-                                          },
-                                        ),
-                                      ],
-                                    ),
+                              );
+                              return;
+                            }
+                            final tag = await Navigator.push<String>(
+                              context,
+                              SakuraPageRoute(
+                                builder: (context) => AndroidFullImageScreen(
+                                  postData: item,
+                                ),
+                              ),
+                            );
+                            if (tag != null && tag.isNotEmpty) {
+                              setState(() {
+                                _searchTag = tag;
+                                _currentTabIndex = 1;
+                                _navBarVisible = true;
+                              });
+                            }
+                          },
+                          onFavoriteToggle: () =>
+                              favoritesNotifier.toggleFavorite(item),
+                          onDownloadTap: () async {
+                            if (_processingDownloads.contains(postId)) return;
+                            if (_isPostDownloaded(postId)) {
+                              _showSnackbar('Already downloaded');
+                              return;
+                            }
+                            try {
+                              _processingDownloads.add(postId);
+                              final result = await downloadNotifier
+                                  .enqueueDownload(item);
+                              if (context.mounted) {
+                                final message = switch (result) {
+                                  EnqueueResult.success =>
+                                    'Added to download queue',
+                                  EnqueueResult.alreadyDownloaded =>
+                                    'Already downloaded',
+                                  EnqueueResult.alreadyInQueue =>
+                                    'Already in queue',
+                                  EnqueueResult.failed => 'Download failed',
+                                };
+                                _showSnackbar(message);
+                              }
+                            } finally {
+                              _processingDownloads.remove(postId);
+                            }
+                          },
+                        );
+                      },
+                    ),
+                  );
+                },
+              );
+            }
+
+            return Scaffold(
+              extendBodyBehindAppBar: true,
+              extendBody: true,
+              appBar: PreferredSize(
+                preferredSize: Size.fromHeight(appBarHeight),
+                child: AppBar(
+                  toolbarHeight: appBarHeight,
+                  centerTitle: !isLandscape,
+                  titleSpacing: isLandscape ? 8 : NavigationToolbar.kMiddleSpacing,
+                  title: Text(
+                    _currentTabIndex == 1
+                        ? 'Search'
+                        : showFavoritesView
+                            ? 'Favorites'
+                            : 'SakuraView',
+                    style: TextStyle(
+                      fontSize: isLandscape ? 17 : 19,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  flexibleSpace: _GlassAppBarBackground(),
+                  actions: [
+                    // Safe mode quick toggle pill
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(18),
+                        onTap: () =>
+                            handleSafeModeChanged(!siteConfig.config.safeMode),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 9,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: siteConfig.config.safeMode
+                                ? Colors.teal.withAlpha(45)
+                                : Colors.pinkAccent.withAlpha(45),
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: siteConfig.config.safeMode
+                                  ? Colors.tealAccent.withAlpha(110)
+                                  : Colors.pinkAccent.withAlpha(110),
+                              width: 0.8,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                siteConfig.config.safeMode
+                                    ? Icons.shield_outlined
+                                    : Icons.local_fire_department_rounded,
+                                size: 13,
+                                color: siteConfig.config.safeMode
+                                    ? Colors.tealAccent
+                                    : Colors.pinkAccent,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                siteConfig.config.safeMode ? 'SAFE' : 'ALL',
+                                style: TextStyle(
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: siteConfig.config.safeMode
+                                      ? Colors.tealAccent
+                                      : Colors.pinkAccent,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    // Interactive Site Switcher Pill
+                    Padding(
+                      padding: const EdgeInsets.only(right: 10),
+                      child: PopupMenuButton<ImageSite>(
+                        tooltip: 'Switch Site',
+                        onSelected: handleSiteChanged,
+                        offset: const Offset(0, 40),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        itemBuilder: (context) => ImageSite.values.map((s) {
+                          final active = s == siteConfig.config.site;
+                          return PopupMenuItem<ImageSite>(
+                            value: s,
+                            child: Row(
+                              children: [
+                                Icon(
+                                  active
+                                      ? Icons.radio_button_checked
+                                      : Icons.radio_button_off,
+                                  size: 16,
+                                  color: active
+                                      ? Theme.of(context).colorScheme.primary
+                                      : null,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  s.displayName,
+                                  style: TextStyle(
+                                    fontWeight: active
+                                        ? FontWeight.w600
+                                        : FontWeight.normal,
                                   ),
                                 ),
                               ],
                             ),
+                          );
+                        }).toList(),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
                           ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              );
-            },
-          );
-        }
-
-        return Consumer<SiteConfigProvider>(
-          builder: (context, siteConfig, child) {
-            return Scaffold(
-              extendBodyBehindAppBar: true,
-              extendBody: true,
-              appBar: AppBar(
-                title: Text(
-                  _currentTabIndex == 1
-                      ? 'Search'
-                      : showFavoritesView
-                          ? 'Favorites'
-                          : 'SakuraView',
-                ),
-                flexibleSpace: _GlassAppBarBackground(),
-                actions: [
-                  if (_currentTabIndex != 1)
-                    Container(
-                      margin: const EdgeInsets.only(right: 8),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withAlpha(180),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: Colors.white.withAlpha(100),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.cloud, size: 14, color: Colors.grey[600]),
-                          const SizedBox(width: 4),
-                          Text(
-                            siteConfig.config.site.displayName,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey[700],
-                              fontWeight: FontWeight.w500,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withAlpha(200),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: Colors.white.withAlpha(120),
                             ),
                           ),
-                        ],
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.cloud,
+                                  size: 13, color: Colors.grey[700]),
+                              const SizedBox(width: 4),
+                              Text(
+                                siteConfig.config.site.displayName,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey[800],
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(width: 2),
+                              Icon(Icons.expand_more,
+                                  size: 14, color: Colors.grey[700]),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                ],
+                  ],
+                ),
               ),
               drawer: AppDrawer(
                 isSafeMode: siteConfig.config.safeMode,
@@ -521,6 +544,7 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
                   setState(() {
                     showFavoritesView = false;
                     _currentTabIndex = 1;
+                    _navBarVisible = true;
                   });
                   Navigator.pop(context);
                 },
@@ -547,12 +571,29 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
                     ],
                   ),
                 ),
-                child: bodyContent,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 240),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) {
+                    return SakuraEntranceTransition(
+                      animation: animation,
+                      child: child,
+                    );
+                  },
+                  child: bodyContent,
+                ),
               ),
-              bottomNavigationBar: _GlassBottomNav(
+              bottomNavigationBar: TelegramFloatingNavBar(
                 currentIndex: _currentTabIndex,
+                visible: _navBarVisible,
                 onDestinationSelected: (index) {
                   setState(() {
+                    _navBarVisible = true;
+                    if (index == 3) {
+                      Navigator.pushNamed(context, '/downloads');
+                      return;
+                    }
                     _currentTabIndex = index;
                     if (index == 1) {
                       _searchTag = null;
@@ -561,10 +602,6 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
                       if (imageList.isEmpty) fetchImages(clear: true);
                     } else if (index == 2) {
                       showFavoritesView = true;
-                    } else if (index == 3) {
-                      handleDownloadsTapped();
-                      _currentTabIndex = 0;
-                      return;
                     }
                   });
                 },
@@ -573,6 +610,267 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
           },
         );
       },
+    );
+  }
+
+  Widget _buildErrorOrEmptyView(SiteConfigProvider siteConfig) {
+    final isDanbooru403 = _lastError != null &&
+        (_lastError!.contains('403') || _lastError!.contains('Cloudflare'));
+    return Center(
+      key: ValueKey<String>('empty_${siteConfig.config.site.name}'),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isDanbooru403 ? Icons.security_rounded : Icons.cloud_off_rounded,
+              size: 56,
+              color: Colors.grey[400],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _lastError ??
+                  'No images found.\nTry switching sites or check connection.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey[400], fontSize: 13.5),
+            ),
+            const SizedBox(height: 18),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                FilledButton.icon(
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text('Retry'),
+                  onPressed: () => fetchImages(clear: true),
+                ),
+                if (isDanbooru403)
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.vpn_key_outlined, size: 18),
+                    label: const Text('Configure API Key'),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        SakuraPageRoute(
+                          builder: (context) => const SettingsPage(),
+                        ),
+                      );
+                    },
+                  ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                  label: const Text('Switch to Yande.re'),
+                  onPressed: () => handleSiteChanged(ImageSite.yandere),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Card widget combining SakuraView's rounded design with pixes's `IllustWidget`
+/// animated image loading, subtle outline border, and corner metadata badges.
+class _SakuraPostGridTile extends StatelessWidget {
+  final Map<String, dynamic> item;
+  final double aspectRatio;
+  final bool hasChildren;
+  final bool isFavorite;
+  final bool isDownloaded;
+  final String rating;
+  final String fileExt;
+  final VoidCallback onTap;
+  final VoidCallback onFavoriteToggle;
+  final VoidCallback onDownloadTap;
+
+  const _SakuraPostGridTile({
+    required this.item,
+    required this.aspectRatio,
+    required this.hasChildren,
+    required this.isFavorite,
+    required this.isDownloaded,
+    required this.rating,
+    required this.fileExt,
+    required this.onTap,
+    required this.onFavoriteToggle,
+    required this.onDownloadTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final String imageUrl = item['preview_url'] as String? ??
+        item['sample_url'] as String? ??
+        '';
+    final bool isExplicit = rating == 'e';
+    final bool isGif = fileExt == 'gif' || fileExt == 'webm' || fileExt == 'mp4';
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12.0),
+          color: cs.surfaceContainerHighest.withAlpha(80),
+          border: Border.all(
+            color: cs.outlineVariant.withAlpha(90),
+            width: 0.8,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withAlpha(35),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: AspectRatio(
+          aspectRatio: aspectRatio,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              SakuraAnimatedImage(
+                imageUrl: imageUrl,
+                fit: BoxFit.cover,
+                filterQuality: FilterQuality.medium,
+              ),
+              // Top-left badges (pixes style)
+              if (hasChildren || isGif)
+                Positioned(
+                  top: 6,
+                  left: 6,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (hasChildren)
+                        _CardBadge(
+                          text: 'Group',
+                          color: cs.secondary.withAlpha(200),
+                        ),
+                      if (hasChildren && isGif) const SizedBox(width: 4),
+                      if (isGif)
+                        _CardBadge(
+                          text: fileExt.toUpperCase(),
+                          color: cs.primaryContainer.withAlpha(210),
+                          textColor: cs.onPrimaryContainer,
+                        ),
+                    ],
+                  ),
+                ),
+              if (isExplicit)
+                Positioned(
+                  top: 6,
+                  right: 6,
+                  child: _CardBadge(
+                    text: 'R18',
+                    color: Colors.redAccent.withAlpha(210),
+                  ),
+                ),
+              // Subtle bottom gradient with compact action buttons
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(6, 12, 4, 2),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [
+                        Colors.black54,
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      _CompactCardIconBtn(
+                        icon: isFavorite
+                            ? Icons.favorite_rounded
+                            : Icons.favorite_border_rounded,
+                        color: isFavorite ? Colors.pinkAccent : Colors.white,
+                        onTap: onFavoriteToggle,
+                      ),
+                      const SizedBox(width: 2),
+                      _CompactCardIconBtn(
+                        icon: isDownloaded
+                            ? Icons.download_done_rounded
+                            : Icons.download_outlined,
+                        color: isDownloaded ? Colors.greenAccent : Colors.white,
+                        onTap: onDownloadTap,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CardBadge extends StatelessWidget {
+  final String text;
+  final Color color;
+  final Color textColor;
+
+  const _CardBadge({
+    required this.text,
+    required this.color,
+    this.textColor = Colors.white,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: textColor,
+          fontSize: 9.5,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactCardIconBtn extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _CompactCardIconBtn({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(5.0),
+          child: Icon(icon, size: 18, color: color),
+        ),
+      ),
     );
   }
 }
@@ -587,13 +885,13 @@ class _GlassAppBarBackground extends StatelessWidget {
         child: Container(
           decoration: BoxDecoration(
             color: brightness == Brightness.light
-                ? Colors.white.withAlpha(200)
-                : const Color(0xFF1A1A2E).withAlpha(200),
+                ? Colors.white.withAlpha(185)
+                : const Color(0xFF1A1A2E).withAlpha(185),
             border: Border(
               bottom: BorderSide(
                 color: brightness == Brightness.light
                     ? Colors.black.withAlpha(15)
-                    : Colors.white.withAlpha(15),
+                    : Colors.white.withAlpha(18),
               ),
             ),
           ),
@@ -603,56 +901,17 @@ class _GlassAppBarBackground extends StatelessWidget {
   }
 }
 
-class _GlassBottomNav extends StatelessWidget {
-  final int currentIndex;
-  final Function(int) onDestinationSelected;
-
-  const _GlassBottomNav({
-    required this.currentIndex,
-    required this.onDestinationSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: NavigationBar(
-          selectedIndex: currentIndex,
-          onDestinationSelected: onDestinationSelected,
-          animationDuration: const Duration(milliseconds: 300),
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.home_outlined),
-              selectedIcon: Icon(Icons.home),
-              label: 'Home',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.search_outlined),
-              selectedIcon: Icon(Icons.search),
-              label: 'Search',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.favorite_outline),
-              selectedIcon: Icon(Icons.favorite),
-              label: 'Favorites',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.download_outlined),
-              selectedIcon: Icon(Icons.download),
-              label: 'Downloads',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class FavoriteDisplayWidget extends StatelessWidget {
   final List<Map<String, dynamic>> favoriteItems;
-  const FavoriteDisplayWidget({super.key, required this.favoriteItems});
+  final double topPadding;
+  final double bottomPadding;
+
+  const FavoriteDisplayWidget({
+    super.key,
+    required this.favoriteItems,
+    this.topPadding = 64.0,
+    this.bottomPadding = 80.0,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -671,84 +930,63 @@ class FavoriteDisplayWidget extends StatelessWidget {
         ),
       );
     }
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: MasonryGridView.count(
-        crossAxisCount:
-            (MediaQuery.of(context).size.width / 180).floor().clamp(2, 4),
-        mainAxisSpacing: 8,
-        crossAxisSpacing: 8,
-        itemCount: favoriteItems.length,
-        itemBuilder: (context, index) {
-          final item = favoriteItems[index];
-          final String imageUrl = item['sample_url'] as String? ??
-              item['preview_url'] as String? ??
-              '';
-          final num imgWidth = item['width'] as num? ??
-              item['sample_width'] as num? ??
-              1;
-          final num imgHeight = item['height'] as num? ??
-              item['sample_height'] as num? ??
-              1;
-          final double aspectRatio = (imgWidth <= 0 || imgHeight <= 0)
-              ? 1.0
-              : imgWidth / imgHeight;
+    final width = MediaQuery.of(context).size.width;
+    final cols = (width / 170).floor().clamp(2, 7);
 
-          return Card(
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14.0),
-            ),
-            child: InkWell(
-              onTap: () {
-                final hasChildren =
-                    item['has_children'] as bool? ?? false;
-                if (hasChildren) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => GroupPostsScreen(parentPost: item),
-                    ),
-                  );
-                  return;
-                }
+    return MasonryGridView.count(
+      padding: EdgeInsets.fromLTRB(10, topPadding, 10, bottomPadding),
+      crossAxisCount: cols,
+      mainAxisSpacing: 8,
+      crossAxisSpacing: 8,
+      itemCount: favoriteItems.length,
+      itemBuilder: (context, index) {
+        final item = favoriteItems[index];
+        final String imageUrl = item['sample_url'] as String? ??
+            item['preview_url'] as String? ??
+            '';
+        final num imgWidth =
+            item['width'] as num? ?? item['sample_width'] as num? ?? 1;
+        final num imgHeight =
+            item['height'] as num? ?? item['sample_height'] as num? ?? 1;
+        final double aspectRatio = (imgWidth <= 0 || imgHeight <= 0)
+            ? 1.0
+            : (imgWidth / imgHeight).clamp(0.42, 2.4);
+
+        return Card(
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12.0),
+          ),
+          child: InkWell(
+            onTap: () {
+              final hasChildren = item['has_children'] as bool? ?? false;
+              if (hasChildren) {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) =>
-                        AndroidFullImageScreen(postData: item),
+                  SakuraPageRoute(
+                    builder: (_) => GroupPostsScreen(parentPost: item),
                   ),
                 );
-              },
-              child: AspectRatio(
-                aspectRatio: aspectRatio,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14.0),
-                  child: CachedNetworkImage(
-                    imageUrl: imageUrl,
-                    filterQuality: FilterQuality.medium,
-                    placeholder: (context, url) => Shimmer.fromColors(
-                      baseColor: Colors.grey[200]!,
-                      highlightColor: Colors.grey[100]!,
-                      child: Container(color: Colors.white),
-                    ),
-                    errorWidget: (context, url, error) => const Center(
-                      child: Icon(
-                        Icons.broken_image,
-                        color: Colors.grey,
-                        size: 40,
-                      ),
-                    ),
-                    fit: BoxFit.cover,
-                    fadeInDuration: const Duration(milliseconds: 300),
-                    fadeInCurve: Curves.easeIn,
-                  ),
+                return;
+              }
+              Navigator.push(
+                context,
+                SakuraPageRoute(
+                  builder: (context) =>
+                      AndroidFullImageScreen(postData: item),
                 ),
+              );
+            },
+            child: AspectRatio(
+              aspectRatio: aspectRatio,
+              child: SakuraAnimatedImage(
+                imageUrl: imageUrl,
+                fit: BoxFit.cover,
               ),
             ),
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 }

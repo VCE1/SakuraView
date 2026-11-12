@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -14,6 +14,7 @@ import 'package:vce1_sakuraview/providers/favorites_notifier.dart';
 import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
 
 class UserUtils {
   static String getAvatarUrl(int creatorId) {
@@ -203,7 +204,7 @@ class _WindowsFullImageScreenState extends State<WindowsFullImageScreen> {
 
     _logger
         .info('Attempting to load PREVIEW image for detail view: $_previewUrl');
-    final imageProvider = CachedNetworkImageProvider(_previewUrl);
+    final imageProvider = createSiteImageProvider(_previewUrl);
     final ImageStream stream =
         imageProvider.resolve(const ImageConfiguration());
     final Completer<void> imageLoadCompleter = Completer<void>();
@@ -345,7 +346,7 @@ class _WindowsFullImageScreenState extends State<WindowsFullImageScreen> {
     }
 
     try {
-      final imageProvider = CachedNetworkImageProvider(_originalUrl);
+      final imageProvider = createSiteImageProvider(_originalUrl);
       final ImageStream stream =
           imageProvider.resolve(const ImageConfiguration());
       final Completer<void> completer = Completer<void>();
@@ -675,18 +676,10 @@ class _WindowsFullImageScreenState extends State<WindowsFullImageScreen> {
                 errorBuilder: (context, error, stackTrace) =>
                     _buildErrorHolder('Local preview load failed'),
               )
-            : CachedNetworkImage(
+            : SakuraAnimatedImage(
                 imageUrl: _previewUrl,
                 fit: BoxFit.contain,
                 filterQuality: FilterQuality.medium,
-                fadeInDuration: const Duration(milliseconds: 300),
-                progressIndicatorBuilder: (context, url, downloadProgress) {
-                  return Center(
-                      child: CircularProgressIndicator(
-                          value: downloadProgress.progress, strokeWidth: 2.0));
-                },
-                errorWidget: (context, url, error) =>
-                    _buildErrorHolder('Preview image load failed'),
               ),
       ),
     );
@@ -746,7 +739,7 @@ class _WindowsFullImageScreenState extends State<WindowsFullImageScreen> {
       if (_isLocalFile) {
         imageProvider = FileImage(File(_originalUrl));
       } else {
-        imageProvider = CachedNetworkImageProvider(_originalUrl);
+        imageProvider = createSiteImageProvider(_originalUrl);
       }
       return KeyboardListener(
         focusNode: _focusNode,

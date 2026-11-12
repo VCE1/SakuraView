@@ -1,8 +1,6 @@
-﻿import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:provider/provider.dart';
-import 'package:shimmer/shimmer.dart';
 import 'package:logging/logging.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
@@ -15,6 +13,8 @@ import 'package:vce1_sakuraview/widgets/drawer_widget.dart';
 import 'package:vce1_sakuraview/widgets/windows/window_full_image_screen.dart';
 import 'package:vce1_sakuraview/widgets/common/group_posts_screen.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
 import 'package:vce1_sakuraview/models/site_config.dart';
 import 'package:vce1_sakuraview/pages/search_page.dart';
 
@@ -268,23 +268,25 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
 
                       return GestureDetector(
                         onTap: () async {
-                          if (hasChildren) {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => GroupPostsScreen(parentPost: item),
-                              ),
-                            );
-                            return;
-                          }
-                          final tag = await Navigator.push<String>(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => WindowsFullImageScreen(
-                                postData: item,
-                              ),
-                            ),
-                          );
+                                  if (hasChildren) {
+                                    Navigator.push(
+                                      context,
+                                      SakuraPageRoute(
+                                        builder: (_) =>
+                                            GroupPostsScreen(parentPost: item),
+                                      ),
+                                    );
+                                    return;
+                                  }
+                                  final tag = await Navigator.push<String>(
+                                    context,
+                                    SakuraPageRoute(
+                                      builder: (context) =>
+                                          WindowsFullImageScreen(
+                                        postData: item,
+                                      ),
+                                    ),
+                                  );
                           if (tag != null && tag.isNotEmpty && mounted) {
                             setState(() {
                               _searchTag = tag;
@@ -306,36 +308,19 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
                             child: Stack(
                               alignment: Alignment.center,
                               children: [
-                                Positioned.fill(
-                                  child: ClipRRect(
-                                    borderRadius:
-                                        BorderRadius.circular(14.0),
-                                    child: CachedNetworkImage(
-                                      imageUrl: item['preview_url']
-                                              as String? ??
-                                          item['sample_url'] as String? ??
-                                          '',
-                                      filterQuality: FilterQuality.medium,
-                                      placeholder: (context, url) =>
-                                          Shimmer.fromColors(
-                                        baseColor: Colors.grey[200]!,
-                                        highlightColor: Colors.grey[100]!,
-                                        child: Container(
-                                          color: Colors.white,
-                                        ),
+                                  Positioned.fill(
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(14.0),
+                                      child: SakuraAnimatedImage(
+                                        imageUrl: item['preview_url']
+                                                as String? ??
+                                            item['sample_url'] as String? ??
+                                            '',
+                                        filterQuality: FilterQuality.medium,
+                                        fit: BoxFit.cover,
                                       ),
-                                      errorWidget: (context, url, error) =>
-                                          Center(
-                                        child: Icon(
-                                          Icons.broken_image,
-                                          color: Colors.grey[300],
-                                          size: 40,
-                                        ),
-                                      ),
-                                      fit: BoxFit.cover,
                                     ),
                                   ),
-                                ),
                                 if (hasChildren)
                                   Positioned(
                                     top: 6,
@@ -688,7 +673,7 @@ class FavoriteDisplayWidget extends StatelessWidget {
                 if (hasChildren) {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(
+                    SakuraPageRoute(
                       builder: (_) => GroupPostsScreen(parentPost: item),
                     ),
                   );
@@ -696,7 +681,7 @@ class FavoriteDisplayWidget extends StatelessWidget {
                 }
                 final tag = await Navigator.push<String>(
                   context,
-                  MaterialPageRoute(
+                  SakuraPageRoute(
                     builder: (context) =>
                         WindowsFullImageScreen(postData: item),
                   ),
@@ -709,24 +694,10 @@ class FavoriteDisplayWidget extends StatelessWidget {
                 aspectRatio: aspectRatio,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(14.0),
-                  child: CachedNetworkImage(
+                  child: SakuraAnimatedImage(
                     imageUrl: imageUrl,
                     filterQuality: FilterQuality.medium,
-                    placeholder: (context, url) => Shimmer.fromColors(
-                      baseColor: Colors.grey[200]!,
-                      highlightColor: Colors.grey[100]!,
-                      child: Container(color: Colors.white),
-                    ),
-                    errorWidget: (context, url, error) => const Center(
-                      child: Icon(
-                        Icons.broken_image,
-                        color: Colors.grey,
-                        size: 40,
-                      ),
-                    ),
                     fit: BoxFit.cover,
-                    fadeInDuration: const Duration(milliseconds: 300),
-                    fadeInCurve: Curves.easeIn,
                   ),
                 ),
               ),

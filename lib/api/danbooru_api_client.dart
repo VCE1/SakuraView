@@ -13,12 +13,20 @@ class DanbooruApiClient extends ImageApiClient {
   static final _logger = Logger('DanbooruApiClient');
 
   @override
-  Map<String, String> get headers => {
-        'Content-Type': 'application/json',
-        'User-Agent': username.isNotEmpty
-            ? 'vce1.sakuraview/1.1 ($username)'
-            : 'vce1.sakuraview/1.1 (vce1)',
-      };
+  Map<String, String> get headers {
+    final map = <String, String>{
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'User-Agent': username.isNotEmpty
+          ? 'vce1.sakuraview/1.1 ($username)'
+          : 'vce1.sakuraview/1.1 (vce1)',
+    };
+    if (username.isNotEmpty && apiKey.isNotEmpty) {
+      final token = base64Encode(utf8.encode('$username:$apiKey'));
+      map['Authorization'] = 'Basic $token';
+    }
+    return map;
+  }
 
   Map<String, String> _withAuth(Map<String, String> params) {
     if (username.isNotEmpty && apiKey.isNotEmpty) {
@@ -61,8 +69,18 @@ class DanbooruApiClient extends ImageApiClient {
     try {
       final response = await httpGet(uri);
       if (response.statusCode != 200) {
+        final isCfChallenge = response.statusCode == 403 &&
+            (response.headers['cf-mitigated'] == 'challenge' ||
+                response.body.contains('Just a moment...') ||
+                response.body.contains('challenges.cloudflare.com'));
+        if (isCfChallenge) {
+          throw ApiException(
+            'Danbooru 触发了 Cloudflare 验证拦截 (HTTP 403)。请在设置中配置 Danbooru 用户名与 API Key，或切换代理节点。',
+            statusCode: 403,
+          );
+        }
         throw ApiException(
-          'Danbooru returned ${response.statusCode}',
+          'Danbooru 请求失败 (HTTP ${response.statusCode})',
           statusCode: response.statusCode,
         );
       }
@@ -83,6 +101,8 @@ class DanbooruApiClient extends ImageApiClient {
         }
       }
       return posts;
+    } on ApiException {
+      rethrow;
     } on http.ClientException catch (e) {
       throw ApiException('Network error: ${e.message}', originalError: e);
     } on FormatException catch (e) {

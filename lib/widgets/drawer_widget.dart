@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/providers/theme_provider.dart';

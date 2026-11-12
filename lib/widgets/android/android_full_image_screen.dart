@@ -1,7 +1,6 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:logging/logging.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:flutter/services.dart';
@@ -14,6 +13,8 @@ import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
 import 'package:vce1_sakuraview/providers/favorites_notifier.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
 
 class FormatUtils {
   static String fileSize(int bytes) {
@@ -66,7 +67,6 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
 
   List<Map<String, dynamic>> _childPosts = [];
   bool _loadingChildren = false;
-  bool _previewLoaded = false;
 
   String get _id => widget.postData['id']?.toString() ?? '';
   bool get _isLocal => widget.postData['is_local_file'] as bool? ?? false;
@@ -76,19 +76,19 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
     if (_isLocal) return widget.postData['local_file_path'] as String? ?? '';
     return (widget.postData['sample_url'] ??
             widget.postData['jpeg_url'] ??
+            widget.postData['preview_url'] ??
             '')
         as String;
   }
 
   String get _origUrl {
     if (_isLocal) return widget.postData['local_file_path'] as String? ?? '';
-    return (widget.postData['file_url'] ?? '') as String;
+    return (widget.postData['file_url'] ?? _previewUrl) as String;
   }
 
   @override
   void initState() {
     super.initState();
-    _loadPreview();
     if (!_isLocal && _postId != 0) {
       _resolveFullDetailIfNeeded();
       if (widget.postData['has_children'] == true) {
@@ -128,22 +128,6 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
     super.dispose();
   }
 
-  void _loadPreview() {
-    if (_previewUrl.isEmpty) return;
-    if (_isLocal) {
-      setState(() => _previewLoaded = true);
-      return;
-    }
-    CachedNetworkImageProvider(_previewUrl)
-        .resolve(const ImageConfiguration())
-        .addListener(ImageStreamListener(
-          (_, __) {
-            if (mounted) setState(() => _previewLoaded = true);
-          },
-          onError: (_, __) {},
-        ));
-  }
-
   Future<void> _fetchChildren() async {
     setState(() => _loadingChildren = true);
     try {
@@ -166,13 +150,20 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
       _snack('Original URL not available');
       return;
     }
+    if (_isLocal) {
+      setState(() {
+        _mode = _DisplayMode.zoomable;
+        _origProgress = null;
+      });
+      return;
+    }
     setState(() {
       _mode = _DisplayMode.loading;
       _origProgress = 0;
     });
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
-    CachedNetworkImageProvider(_origUrl)
+    createSiteImageProvider(_origUrl)
         .resolve(const ImageConfiguration())
         .addListener(ImageStreamListener(
           (_, __) {
@@ -187,8 +178,8 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
             if (mounted &&
                 event.expectedTotalBytes != null &&
                 event.expectedTotalBytes! > 0) {
-              setState(() =>
-                  _origProgress = event.cumulativeBytesLoaded / event.expectedTotalBytes!);
+              setState(() => _origProgress =
+                  event.cumulativeBytesLoaded / event.expectedTotalBytes!);
             }
           },
           onError: (_, __) => _exitFull('Failed to load original'),
@@ -262,7 +253,8 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
                 const SizedBox(height: 8),
                 Text(
                   'Tap to cancel',
-                  style: TextStyle(color: Colors.white.withAlpha(150), fontSize: 13),
+                  style: TextStyle(
+                      color: Colors.white.withAlpha(150), fontSize: 13),
                 ),
               ],
             ),
@@ -273,7 +265,7 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
   Widget _buildZoomableView() {
     final provider = _isLocal
         ? FileImage(File(_origUrl)) as ImageProvider
-        : CachedNetworkImageProvider(_origUrl);
+        : createSiteImageProvider(_origUrl);
     return Scaffold(
       backgroundColor: Colors.black,
       body: PhotoView(
@@ -293,9 +285,86 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
 
   Widget _buildDetailView() {
     final p = widget.postData;
-    final tags = ((p['tags'] as String?) ?? '').split(' ').where((t) => t.isNotEmpty).toList();
+    final tags = ((p['tags'] as String?) ?? '')
+        .split(' ')
+        .where((t) => t.isNotEmpty)
+        .toList();
     final author = (p['author'] as String?) ?? '';
     final cid = p['creator_id'] as int? ?? 0;
+
+    final size = MediaQuery.of(context).size;
+    final isLandscapeSplit = size.width > size.height && size.width >= 600;
+
+    if (isLandscapeSplit) {
+      // Pixes-inspired Tablet / Landscape 2-Pane Split Layout
+      return Scaffold(
+        body: SafeArea(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                flex: 6,
+                child: Container(
+                  margin: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .surfaceContainerHighest
+                        .withAlpha(110),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      GestureDetector(
+                        onTap: _loadOriginal,
+                        child: _buildPreviewImageWidget(BoxFit.contain),
+                      ),
+                      Positioned(
+                        top: 10,
+                        left: 10,
+                        child: Material(
+                          color: Colors.black45,
+                          shape: const CircleBorder(),
+                          child: IconButton(
+                            icon: const Icon(Icons.arrow_back,
+                                color: Colors.white, size: 20),
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () => Navigator.maybePop(context),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        right: 12,
+                        bottom: 12,
+                        child: _buildViewOriginalBadge(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Expanded(
+                flex: 5,
+                child: ListView(
+                  controller: _scrollCtrl,
+                  padding: const EdgeInsets.fromLTRB(10, 12, 16, 24),
+                  children: [
+                    _buildHeader(p, tags),
+                    const SizedBox(height: 12),
+                    _buildInfoCard(p, author, cid),
+                    if (_childPosts.isNotEmpty || _loadingChildren) ...[
+                      const SizedBox(height: 12),
+                      _buildChildrenSection(),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       body: CustomScrollView(
@@ -322,12 +391,57 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
     );
   }
 
+  Widget _buildPreviewImageWidget(BoxFit fit) {
+    if (_isLocal) {
+      return Image.file(
+        File(_previewUrl),
+        fit: fit,
+        errorBuilder: (_, __, ___) => const SizedBox(),
+      );
+    }
+    return SakuraAnimatedImage(
+      imageUrl: _previewUrl,
+      fit: fit,
+      filterQuality: FilterQuality.high,
+    );
+  }
+
+  Widget _buildViewOriginalBadge() {
+    return GestureDetector(
+      onTap: _loadOriginal,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: const Duration(milliseconds: 350),
+        builder: (ctx, v, _) => Opacity(
+          opacity: v,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.black54,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.fullscreen, size: 14, color: Colors.white),
+                SizedBox(width: 4),
+                Text('View original',
+                    style: TextStyle(color: Colors.white, fontSize: 11)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildImageSliver() {
     final w = (widget.postData['sample_width'] as num?)?.toDouble() ?? 0;
     final h = (widget.postData['sample_height'] as num?)?.toDouble() ?? 0;
     final sw = MediaQuery.of(context).size.width;
+    final sh = MediaQuery.of(context).size.height;
     final aspect = w > 0 && h > 0 ? w / h : 1.5;
-    final imgH = (sw / aspect).clamp(250.0, sw * 1.2).toDouble();
+    final imgH = (sw / aspect).clamp(240.0, sh * 0.68).toDouble();
 
     return SliverAppBar(
       expandedHeight: imgH,
@@ -340,46 +454,12 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              _isLocal
-                  ? Image.file(File(_previewUrl), fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => const SizedBox())
-                  : CachedNetworkImage(
-                      imageUrl: _previewUrl,
-                      fit: BoxFit.contain,
-                      placeholder: (_, __) => Container(
-                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                      ),
-                      errorWidget: (_, __, ___) => const SizedBox(),
-                    ),
+              _buildPreviewImageWidget(BoxFit.contain),
               Positioned(
                 right: 12,
                 bottom: 12,
-                child: TweenAnimationBuilder<double>(
-                  tween: Tween(begin: 0, end: 1),
-                  duration: const Duration(milliseconds: 400),
-                  builder: (ctx, v, _) => Opacity(
-                    opacity: v,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.black54,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.fullscreen, size: 14, color: Colors.white),
-                          SizedBox(width: 4),
-                          Text('View original',
-                              style: TextStyle(color: Colors.white, fontSize: 11)),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
+                child: _buildViewOriginalBadge(),
               ),
-              if (!_previewLoaded)
-                const Center(child: SakuraLoader(size: 28)),
             ],
           ),
         ),
@@ -403,8 +483,9 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
               isActive: context.watch<FavoritesNotifier>().isFavorite(_id),
               activeColor: Colors.pinkAccent,
               tooltip: 'Favorite',
-              onPressed: () =>
-                  context.read<FavoritesNotifier>().toggleFavorite(widget.postData),
+              onPressed: () => context
+                  .read<FavoritesNotifier>()
+                  .toggleFavorite(widget.postData),
             ),
             _ActionBtn(
               icon: Icons.download_outlined,
@@ -477,7 +558,8 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
             width: 60,
             child: Text(item.label,
                 style: TextStyle(
-                    fontSize: 12, color: theme.colorScheme.onSurface.withAlpha(150))),
+                    fontSize: 12,
+                    color: theme.colorScheme.onSurface.withAlpha(150))),
           ),
           Expanded(
             child: item.cid != null
@@ -487,7 +569,8 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
                         onTap: () async {
                           final uri = Uri.parse(item.value);
                           if (await canLaunchUrl(uri)) {
-                            await launchUrl(uri, mode: LaunchMode.externalApplication);
+                            await launchUrl(uri,
+                                mode: LaunchMode.externalApplication);
                           }
                         },
                         child: Text(item.value,
@@ -518,12 +601,14 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
         children: [
           CircleAvatar(
             radius: 10,
-            backgroundImage: CachedNetworkImageProvider(
+            backgroundImage: createSiteImageProvider(
                 'https://yande.re/data/avatars/$cid.jpg'),
             backgroundColor: Colors.grey.shade300,
           ),
           const SizedBox(width: 6),
-          Text(name, style: TextStyle(fontSize: 12, color: theme.colorScheme.primary)),
+          Text(name,
+              style:
+                  TextStyle(fontSize: 12, color: theme.colorScheme.primary)),
         ],
       ),
     );
@@ -540,8 +625,10 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
             Text('Variants', style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 10),
             _loadingChildren
-                ? const SizedBox(height: 80,
-                    child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
+                ? const SizedBox(
+                    height: 80,
+                    child: Center(
+                        child: CircularProgressIndicator(strokeWidth: 2)))
                 : SizedBox(
                     height: 110,
                     child: ListView.separated(
@@ -555,19 +642,19 @@ class _AndroidFullImageScreenState extends State<AndroidFullImageScreen> {
                           child: InkWell(
                             onTap: () => Navigator.pushReplacement(
                               context,
-                              MaterialPageRoute(
+                              SakuraPageRoute(
                                 builder: (_) =>
                                     AndroidFullImageScreen(postData: cp),
                               ),
                             ),
-                            child: CachedNetworkImage(
-                              imageUrl: cp['preview_url'] as String? ?? '',
+                            child: SizedBox(
                               width: 100,
-                              fit: BoxFit.cover,
-                              errorWidget: (_, __, ___) => Container(
-                                color: Colors.grey.shade800,
-                                child: const Icon(Icons.broken_image,
-                                    color: Colors.white38, size: 28),
+                              child: SakuraAnimatedImage(
+                                imageUrl: cp['preview_url'] as String? ??
+                                    cp['sample_url'] as String? ??
+                                    '',
+                                width: 100,
+                                fit: BoxFit.cover,
                               ),
                             ),
                           ),
@@ -625,18 +712,18 @@ class _TagChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return InkWell(
       onTap: () => Navigator.pop(context, tag),
       borderRadius: BorderRadius.circular(16),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: isDark ? c.surfaceContainerHighest : c.surfaceContainerHighest,
+          color: c.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: c.outlineVariant),
         ),
-        child: Text(tag, style: TextStyle(fontSize: 11.5, color: c.onSurfaceVariant)),
+        child:
+            Text(tag, style: TextStyle(fontSize: 11.5, color: c.onSurfaceVariant)),
       ),
     );
   }
