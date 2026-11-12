@@ -8,6 +8,7 @@ import 'package:vce1_sakuraview/api/zerochan_api_client.dart';
 import 'package:vce1_sakuraview/models/post_hive_model.dart';
 import 'package:vce1_sakuraview/services/proxy_config.dart';
 import 'package:vce1_sakuraview/utils/proxy_settings_page.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_photo_gallery_viewer.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -285,6 +286,24 @@ void main() {
       await tester.tap(find.text('直连模式 (Direct Connection)'));
       await tester.pumpAndSettle();
       expect(find.text('自定义 HTTP 代理服务器'), findsNothing);
+    });
+
+    test('Benchmark 4: ViewerFormatUtils & Metadata parsing throughput (10,000 ops)', () {
+      final sw = Stopwatch()..start();
+      for (int i = 1; i <= 10000; i++) {
+        final fs = ViewerFormatUtils.fileSize(i * 1024 * 512);
+        final res = ViewerFormatUtils.resolution(1920 + i, 1080 + i);
+        final (rating, _) = ViewerFormatUtils.parseRating(i % 3 == 0 ? 's' : (i % 3 == 1 ? 'q' : 'e'));
+        assert(fs.isNotEmpty);
+        assert(res.isNotEmpty);
+        assert(rating.isNotEmpty);
+      }
+      sw.stop();
+      debugPrint('[BENCHMARK] Viewer metadata parse: 10000 ops in ${sw.elapsedMilliseconds}ms (${(sw.elapsedMicroseconds / 10000).toStringAsFixed(2)} us/op)');
+      expect(ViewerFormatUtils.fileSize(10485760), '10.0 MB');
+      expect(ViewerFormatUtils.resolution(3840, 2160), '3840 × 2160');
+      final (labelSafe, _) = ViewerFormatUtils.parseRating('safe');
+      expect(labelSafe, 'Safe 全年龄');
     });
   });
 }

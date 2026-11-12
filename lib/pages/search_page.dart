@@ -265,8 +265,16 @@ class _SearchPageState extends State<SearchPage> {
                   context,
                   SakuraPageRoute(
                     builder: (context) => Platform.isWindows
-                        ? WindowsFullImageScreen(postData: item)
-                        : AndroidFullImageScreen(postData: item),
+                        ? WindowsFullImageScreen(
+                            postData: item,
+                            posts: _results,
+                            initialIndex: index,
+                          )
+                        : AndroidFullImageScreen(
+                            postData: item,
+                            posts: _results,
+                            initialIndex: index,
+                          ),
                   ),
                 );
                 if (tag != null && tag.isNotEmpty && mounted) {

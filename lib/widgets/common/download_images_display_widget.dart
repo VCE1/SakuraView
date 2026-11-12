@@ -1,15 +1,16 @@
-﻿import 'dart:io';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_downloader/flutter_downloader.dart';
 import 'package:hive/hive.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:photo_view/photo_view.dart';
 import 'package:vce1_sakuraview/models/post_hive_model.dart';
 import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
 import 'package:vce1_sakuraview/utils/download_settings_page.dart';
 import 'package:vce1_sakuraview/widgets/android/android_full_image_screen.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_photo_gallery_viewer.dart';
 import 'package:vce1_sakuraview/widgets/windows/window_full_image_screen.dart';
 
 /// Refactored modern Download Management screen referencing Pixes and Boorusama.
@@ -507,29 +508,47 @@ class _DownloadedImagesDisplayState extends State<DownloadedImagesDisplay>
       return;
     }
 
+    final downloadNotifier = context.read<BaseDownloadNotifier>();
+    final items = downloadNotifier.downloadedItems;
+    final postBox = Hive.isBoxOpen('downloaded_posts')
+        ? Hive.box<PostHiveModel>('downloaded_posts')
+        : null;
+
+    final allPosts = items.map((it) {
+      final pid = int.tryParse(it.id);
+      final hivePost =
+          pid != null && postBox != null ? postBox.get(pid) : null;
+      final map =
+          hivePost != null ? hivePost.toApiMap() : <String, dynamic>{};
+      map['id'] = pid ?? it.filePath.hashCode;
+      map['is_local_file'] = true;
+      map['local_file_path'] = it.filePath;
+      map['file_url'] = it.filePath;
+      map['sample_url'] = it.filePath;
+      map['preview_url'] = it.filePath;
+      return map;
+    }).toList();
+
+    final currentIndex = items.indexOf(item).clamp(0, allPosts.isNotEmpty ? allPosts.length - 1 : 0);
+
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => Scaffold(
-          backgroundColor: Colors.black,
-          appBar: AppBar(
-            backgroundColor: Colors.black,
-            foregroundColor: Colors.white,
-            title: Text(item.filename, style: const TextStyle(fontSize: 14)),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.info_outline_rounded),
-                onPressed: () => _viewPostDetails(item),
-              ),
-            ],
-          ),
-          body: PhotoView(
-            imageProvider: FileImage(file),
-            minScale: PhotoViewComputedScale.contained * 0.8,
-            maxScale: PhotoViewComputedScale.covered * 4.0,
-            initialScale: PhotoViewComputedScale.contained,
-            backgroundDecoration: const BoxDecoration(color: Colors.black),
-          ),
+      SakuraPageRoute(
+        builder: (_) => SakuraPhotoGalleryViewer(
+          posts: allPosts.isNotEmpty
+              ? allPosts
+              : [
+                  {
+                    'id': int.tryParse(item.id) ?? 0,
+                    'is_local_file': true,
+                    'local_file_path': item.filePath,
+                    'file_url': item.filePath,
+                    'sample_url': item.filePath,
+                    'preview_url': item.filePath,
+                  }
+                ],
+          initialIndex: currentIndex,
+          isLocal: true,
         ),
       ),
     );

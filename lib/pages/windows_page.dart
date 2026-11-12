@@ -284,6 +284,8 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
                                       builder: (context) =>
                                           WindowsFullImageScreen(
                                         postData: item,
+                                        posts: imageList,
+                                        initialIndex: index,
                                       ),
                                     ),
                                   );
@@ -683,7 +685,11 @@ class FavoriteDisplayWidget extends StatelessWidget {
                   context,
                   SakuraPageRoute(
                     builder: (context) =>
-                        WindowsFullImageScreen(postData: item),
+                        WindowsFullImageScreen(
+                          postData: item,
+                          posts: favoriteItems,
+                          initialIndex: index,
+                        ),
                   ),
                 );
                 if (tag != null && tag.isNotEmpty) {

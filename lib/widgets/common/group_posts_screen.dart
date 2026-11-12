@@ -65,10 +65,19 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
     }
   }
 
-  void _openFullImage(Map<String, dynamic> postData) {
+  void _openFullImage(int index) {
+    final postData = _allPosts[index];
     final screen = Platform.isWindows
-        ? WindowsFullImageScreen(postData: postData)
-        : AndroidFullImageScreen(postData: postData);
+        ? WindowsFullImageScreen(
+            postData: postData,
+            posts: _allPosts,
+            initialIndex: index,
+          )
+        : AndroidFullImageScreen(
+            postData: postData,
+            posts: _allPosts,
+            initialIndex: index,
+          );
     Navigator.push(
       context,
       SakuraPageRoute(builder: (_) => screen),
@@ -165,7 +174,7 @@ class _GroupPostsScreenState extends State<GroupPostsScreen> {
                             final bool isParent = index == 0;
 
                             return GestureDetector(
-                              onTap: () => _openFullImage(post),
+                              onTap: () => _openFullImage(index),
                               child: Card(
                                 clipBehavior: Clip.antiAlias,
                                 shape: RoundedRectangleBorder(

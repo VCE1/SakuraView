@@ -346,6 +346,8 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
                               SakuraPageRoute(
                                 builder: (context) => AndroidFullImageScreen(
                                   postData: item,
+                                  posts: imageList,
+                                  initialIndex: index,
                                 ),
                               ),
                             );
@@ -1166,8 +1168,11 @@ class _FavoriteDisplayWidgetState extends State<FavoriteDisplayWidget> {
                           Navigator.push(
                             context,
                             SakuraPageRoute(
-                              builder: (context) =>
-                                  AndroidFullImageScreen(postData: item),
+                              builder: (context) => AndroidFullImageScreen(
+                                postData: item,
+                                posts: items,
+                                initialIndex: index,
+                              ),
                             ),
                           );
                         },
