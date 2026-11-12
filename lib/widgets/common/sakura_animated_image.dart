@@ -1,55 +1,84 @@
 import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/semantics.dart';
 import 'package:shimmer/shimmer.dart';
+
+/// Custom per-site cookies & User-Agent registry updated by [SiteConfigProvider].
+class SiteImageHeaderRegistry {
+  static final Map<String, Map<String, String>> _siteOverrides = {};
+
+  static void setSiteAuthHeaders({
+    required String domainKeyword,
+    String? cookies,
+    String? userAgent,
+  }) {
+    final map = <String, String>{};
+    if (cookies != null && cookies.trim().isNotEmpty) {
+      map['Cookie'] = cookies.trim();
+    }
+    if (userAgent != null && userAgent.trim().isNotEmpty) {
+      map['User-Agent'] = userAgent.trim();
+    }
+    if (map.isEmpty) {
+      _siteOverrides.remove(domainKeyword);
+    } else {
+      _siteOverrides[domainKeyword] = map;
+    }
+  }
+
+  static Map<String, String> getOverridesForUrl(String url) {
+    final lower = url.toLowerCase();
+    for (final entry in _siteOverrides.entries) {
+      if (lower.contains(entry.key)) {
+        return entry.value;
+      }
+    }
+    return const {};
+  }
+}
 
 /// Site-aware headers helper inspired by pixes's CachedImageProvider.
 Map<String, String> resolveSiteImageHeaders(String url) {
   final lower = url.toLowerCase();
-  if (lower.contains('zerochan.net')) {
-    return const {
-      'Referer': 'https://www.zerochan.net/',
-      'User-Agent': 'SakuraView - vce1',
-      'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-    };
-  }
-  if (lower.contains('donmai.us')) {
-    return const {
-      'Referer': 'https://danbooru.donmai.us/',
-      'User-Agent': 'vce1.sakuraview/1.1 (vce1)',
-      'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-    };
-  }
-  if (lower.contains('yande.re')) {
-    return const {
-      'Referer': 'https://yande.re/',
-      'User-Agent': 'vce1.sakuraview/1.1 (vce1)',
-      'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-    };
-  }
-  return const {
-    'User-Agent': 'vce1.sakuraview/1.1 (vce1)',
+  final base = <String, String>{
+    'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
   };
+  if (lower.contains('zerochan.net')) {
+    base['Referer'] = 'https://www.zerochan.net/';
+    base['User-Agent'] = 'SakuraView - vce1';
+  } else if (lower.contains('donmai.us')) {
+    base['Referer'] = 'https://danbooru.donmai.us/';
+    base['User-Agent'] = 'vce1.sakuraview/1.2 (vce1)';
+  } else if (lower.contains('yande.re')) {
+    base['Referer'] = 'https://yande.re/';
+    base['User-Agent'] = 'vce1.sakuraview/1.2 (vce1)';
+  } else {
+    base['User-Agent'] = 'vce1.sakuraview/1.2 (vce1)';
+  }
+
+  final overrides = SiteImageHeaderRegistry.getOverridesForUrl(url);
+  if (overrides.isNotEmpty) {
+    base.addAll(overrides);
+  }
+  return base;
 }
 
-/// Convenience provider that attaches site-specific headers.
-ImageProvider createSiteImageProvider(String url, {int? maxWidth, int? maxHeight}) {
-  return CachedNetworkImageProvider(
-    url,
-    headers: resolveSiteImageHeaders(url),
-    maxWidth: maxWidth,
-    maxHeight: maxHeight,
-  );
+/// Returns a [CachedNetworkImageProvider] pre-configured with site-specific headers.
+ImageProvider createSiteImageProvider(
+  String url, {
+  Map<String, String>? extraHeaders,
+}) {
+  final baseHeaders = resolveSiteImageHeaders(url);
+  final headers = extraHeaders == null || extraHeaders.isEmpty
+      ? baseHeaders
+      : <String, String>{...baseHeaders, ...extraHeaders};
+  return CachedNetworkImageProvider(url, headers: headers);
 }
 
-/// Image widget modeled on pixes's `AnimatedImage`:
-/// - Uses `ScrollAwareImageProvider` so fast scrolling defers decoding.
-/// - Tracks byte-level `ImageChunkEvent` progress.
-/// - Automatically retries transient network failures and evicts broken cache entries.
-/// - Smoothly transitions from shimmer/progress to decoded `RawImage` via `AnimatedSwitcher`.
+/// An animated image widget modeled after `pixes`'s `AnimatedImage`
+/// (`lib/components/animated_image.dart`), safely handling lifecycle across
+/// orientation / layout changes without prematurely disposing cached `ui.Image`s.
 class SakuraAnimatedImage extends StatefulWidget {
   final String imageUrl;
   final double? width;
@@ -57,6 +86,7 @@ class SakuraAnimatedImage extends StatefulWidget {
   final BoxFit fit;
   final AlignmentGeometry alignment;
   final FilterQuality filterQuality;
+  final Map<String, String>? headers;
   final bool gaplessPlayback;
   final bool showProgressRing;
   final int? cacheWidth;
@@ -71,7 +101,8 @@ class SakuraAnimatedImage extends StatefulWidget {
     this.fit = BoxFit.cover,
     this.alignment = Alignment.center,
     this.filterQuality = FilterQuality.medium,
-    this.gaplessPlayback = false,
+    this.headers,
+    this.gaplessPlayback = true,
     this.showProgressRing = false,
     this.cacheWidth,
     this.cacheHeight,
@@ -88,7 +119,7 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
   ImageInfo? _imageInfo;
   ImageChunkEvent? _loadingProgress;
   bool _isListeningToStream = false;
-  late bool _invertColors;
+  bool _invertColors = false;
   int? _frameNumber;
   bool _wasSynchronouslyLoaded = false;
   late DisposableBuildContext<State<SakuraAnimatedImage>> _scrollAwareContext;
@@ -98,7 +129,10 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
   Timer? _retryTimer;
 
   ImageProvider get _effectiveProvider {
-    final base = createSiteImageProvider(widget.imageUrl);
+    final base = createSiteImageProvider(
+      widget.imageUrl,
+      extraHeaders: widget.headers,
+    );
     return ResizeImage.resizeIfNeeded(
       widget.cacheWidth,
       widget.cacheHeight,
@@ -110,7 +144,8 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _scrollAwareContext = DisposableBuildContext<State<SakuraAnimatedImage>>(this);
+    _scrollAwareContext =
+        DisposableBuildContext<State<SakuraAnimatedImage>>(this);
   }
 
   @override
@@ -120,22 +155,26 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
     _stopListeningToStream();
     _completerHandle?.dispose();
     _scrollAwareContext.dispose();
-    _replaceImage(info: null);
+    // Do NOT call _imageInfo?.dispose() here because CachedNetworkImageProvider's
+    // MultiImageStreamCompleter shares the same ImageInfo instance across
+    // ImageCache and active listeners without cloning. Disposing it during
+    // orientation-change grid rebuilds would corrupt active ui.Image handles.
+    _imageInfo = null;
     super.dispose();
   }
 
   @override
   void didChangeDependencies() {
+    super.didChangeDependencies();
     _updateInvertColors();
     if (widget.imageUrl.isNotEmpty) {
-      _resolveImage();
+      _resolveImage(fromDependenciesChange: true);
       if (TickerMode.valuesOf(context).enabled) {
         _listenToStream();
       } else {
         _stopListeningToStream(keepStreamAlive: true);
       }
     }
-    super.didChangeDependencies();
   }
 
   @override
@@ -150,10 +189,8 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
         _resolveImage();
       } else {
         _stopListeningToStream();
-        setState(() {
-          _replaceImage(info: null);
-          _lastException = ArgumentError('Empty URL');
-        });
+        _imageInfo = null;
+        _lastException = ArgumentError('Empty URL');
       }
     }
   }
@@ -161,7 +198,9 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
   @override
   void didChangeAccessibilityFeatures() {
     super.didChangeAccessibilityFeatures();
-    setState(_updateInvertColors);
+    if (mounted) {
+      setState(_updateInvertColors);
+    }
   }
 
   @override
@@ -177,7 +216,7 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
         SemanticsBinding.instance.accessibilityFeatures.invertColors;
   }
 
-  void _resolveImage() {
+  void _resolveImage({bool fromDependenciesChange = false}) {
     final ScrollAwareImageProvider provider = ScrollAwareImageProvider<Object>(
       context: _scrollAwareContext,
       imageProvider: _effectiveProvider,
@@ -190,7 +229,7 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
             : null,
       ),
     );
-    _updateSourceStream(newStream);
+    _updateSourceStream(newStream, fromDependenciesChange: fromDependenciesChange);
   }
 
   ImageStreamListener? _imageStreamListener;
@@ -208,16 +247,20 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
   }
 
   void _handleImageFrame(ImageInfo imageInfo, bool synchronousCall) {
-    if (!mounted) {
-      imageInfo.dispose();
-      return;
-    }
-    setState(() {
-      _replaceImage(info: imageInfo.clone());
+    if (!mounted) return;
+    if (synchronousCall) {
+      _imageInfo = imageInfo;
       _loadingProgress = null;
       _lastException = null;
       _frameNumber = _frameNumber == null ? 0 : _frameNumber! + 1;
-      _wasSynchronouslyLoaded = _wasSynchronouslyLoaded || synchronousCall;
+      _wasSynchronouslyLoaded = true;
+      return;
+    }
+    setState(() {
+      _imageInfo = imageInfo;
+      _loadingProgress = null;
+      _lastException = null;
+      _frameNumber = _frameNumber == null ? 0 : _frameNumber! + 1;
     });
   }
 
@@ -251,34 +294,33 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
     });
   }
 
-  void _replaceImage({required ImageInfo? info}) {
-    final ImageInfo? oldImageInfo = _imageInfo;
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      oldImageInfo?.dispose();
-    });
-    _imageInfo = info;
-  }
-
-  void _updateSourceStream(ImageStream newStream) {
+  void _updateSourceStream(
+    ImageStream newStream, {
+    bool fromDependenciesChange = false,
+  }) {
     if (_imageStream?.key == newStream.key) {
       return;
     }
+
     if (_isListeningToStream) {
       _imageStream?.removeListener(_getListener());
     }
+
     if (!widget.gaplessPlayback) {
-      setState(() {
-        _replaceImage(info: null);
-      });
+      _imageInfo = null;
     }
-    setState(() {
-      _loadingProgress = null;
-      _frameNumber = null;
-      _wasSynchronouslyLoaded = false;
-    });
+
+    _loadingProgress = null;
+    _frameNumber = null;
+    _wasSynchronouslyLoaded = false;
+
     _imageStream = newStream;
     if (_isListeningToStream) {
       _imageStream!.addListener(_getListener());
+    }
+
+    if (!fromDependenciesChange && mounted) {
+      setState(() {});
     }
   }
 
@@ -293,7 +335,7 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
   }
 
   void _stopListeningToStream({bool keepStreamAlive = false}) {
-    if (!_isListeningToStream || _imageStream == null) {
+    if (!_isListeningToStream) {
       return;
     }
     if (keepStreamAlive &&
@@ -301,134 +343,146 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
         _imageStream?.completer != null) {
       _completerHandle = _imageStream!.completer!.keepAlive();
     }
-    _imageStream!.removeListener(_getListener());
+    _imageStream?.removeListener(_getListener());
     _isListeningToStream = false;
+  }
+
+  void _manualRetry() {
+    if (widget.imageUrl.isEmpty) return;
+    setState(() {
+      _retryCount = 0;
+      _lastException = null;
+      _loadingProgress = null;
+    });
+    PaintingBinding.instance.imageCache.evict(_effectiveProvider);
+    _stopListeningToStream();
+    _imageStreamListener = null;
+    _imageStream = null;
+    _resolveImage();
+    _listenToStream();
   }
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    Widget result;
+    Widget content;
 
-    if (_imageInfo != null) {
-      result = RawImage(
-        key: ValueKey<String>('img_${widget.imageUrl}'),
+    if (widget.imageUrl.isEmpty || _lastException != null) {
+      content = _buildErrorWidget(context);
+    } else if (_imageInfo != null) {
+      Widget raw = RawImage(
         image: _imageInfo?.image,
+        debugImageLabel: _imageInfo?.debugLabel,
         width: widget.width,
         height: widget.height,
-        debugImageLabel: _imageInfo?.debugLabel,
         scale: _imageInfo?.scale ?? 1.0,
+        fit: widget.fit,
         alignment: widget.alignment,
         invertColors: _invertColors,
         filterQuality: widget.filterQuality,
-        fit: widget.fit,
       );
-    } else if (_lastException != null || widget.imageUrl.isEmpty) {
-      result = Container(
-        key: const ValueKey<String>('error'),
-        width: widget.width,
-        height: widget.height,
-        color: isDark
-            ? cs.surfaceContainerHighest.withAlpha(110)
-            : cs.surfaceContainerHighest,
-        child: Center(
-          child: IconButton(
-            tooltip: 'Tap to retry',
-            icon: Icon(
-              Icons.refresh_rounded,
-              color: cs.onSurfaceVariant.withAlpha(160),
-              size: 26,
-            ),
-            onPressed: () {
-              setState(() {
-                _retryCount = 0;
-                _lastException = null;
-              });
-              _imageStreamListener = null;
-              _resolveImage();
-              _listenToStream();
-            },
+      if (!_wasSynchronouslyLoaded) {
+        raw = TweenAnimationBuilder<double>(
+          key: ValueKey<String>(widget.imageUrl),
+          tween: Tween<double>(begin: 0.0, end: 1.0),
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          builder: (ctx, opacity, child) => Opacity(
+            opacity: opacity,
+            child: child,
           ),
-        ),
-      );
-    } else {
-      double? progressValue;
-      if (_loadingProgress != null &&
-          _loadingProgress!.expectedTotalBytes != null &&
-          _loadingProgress!.expectedTotalBytes! > 0) {
-        progressValue = (_loadingProgress!.cumulativeBytesLoaded /
-                _loadingProgress!.expectedTotalBytes!)
-            .clamp(0.0, 1.0);
-      }
-
-      result = Stack(
-        key: const ValueKey<String>('loading'),
-        fit: StackFit.expand,
-        children: [
-          Shimmer.fromColors(
-            baseColor: isDark
-                ? const Color(0xFF232538)
-                : Colors.grey.shade200,
-            highlightColor: isDark
-                ? const Color(0xFF2F324B)
-                : Colors.grey.shade100,
-            period: const Duration(milliseconds: 1100),
-            child: Container(
-              width: widget.width,
-              height: widget.height,
-              color: isDark ? const Color(0xFF232538) : Colors.white,
-            ),
-          ),
-          if (widget.showProgressRing || progressValue != null)
-            Center(
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  value: progressValue,
-                  strokeWidth: 2.2,
-                  color: cs.primary.withAlpha(200),
-                ),
-              ),
-            ),
-        ],
-      );
-    }
-
-    Widget animated = AnimatedSwitcher(
-      duration: const Duration(milliseconds: 220),
-      reverseDuration: const Duration(milliseconds: 160),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeInCubic,
-      layoutBuilder: (currentChild, previousChildren) {
-        return Stack(
-          fit: StackFit.expand,
-          alignment: Alignment.center,
-          children: <Widget>[
-            ...previousChildren,
-            if (currentChild != null) currentChild,
-          ],
+          child: raw,
         );
-      },
-      child: result,
-    );
+      }
+      content = raw;
+    } else {
+      content = _buildLoadingWidget(context);
+    }
 
     if (widget.borderRadius != null) {
-      return ClipRRect(
+      content = ClipRRect(
         borderRadius: widget.borderRadius!,
-        child: animated,
+        child: content,
       );
     }
-    return animated;
+
+    return SizedBox(
+      width: widget.width,
+      height: widget.height,
+      child: content,
+    );
   }
 
-  @override
-  void debugFillProperties(DiagnosticPropertiesBuilder description) {
-    super.debugFillProperties(description);
-    description.add(DiagnosticsProperty<ImageStream>('stream', _imageStream));
-    description.add(DiagnosticsProperty<ImageInfo>('pixels', _imageInfo));
-    description.add(DiagnosticsProperty<ImageChunkEvent>(
-        'loadingProgress', _loadingProgress));
+  Widget _buildLoadingWidget(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
+    final baseColor = isDark
+        ? cs.surfaceContainerHighest.withAlpha(110)
+        : cs.surfaceContainerHighest.withAlpha(160);
+    final highlightColor = isDark
+        ? cs.surfaceContainerHighest.withAlpha(190)
+        : Colors.white.withAlpha(220);
+
+    double? progress;
+    if (_loadingProgress != null &&
+        _loadingProgress!.expectedTotalBytes != null &&
+        _loadingProgress!.expectedTotalBytes! > 0) {
+      progress = _loadingProgress!.cumulativeBytesLoaded /
+          _loadingProgress!.expectedTotalBytes!;
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Shimmer.fromColors(
+          baseColor: baseColor,
+          highlightColor: highlightColor,
+          period: const Duration(milliseconds: 1300),
+          child: const ColoredBox(color: Colors.white),
+        ),
+        if (widget.showProgressRing || (progress != null && progress > 0.05))
+          Center(
+            child: SizedBox(
+              width: 26,
+              height: 26,
+              child: CircularProgressIndicator(
+                value: progress,
+                strokeWidth: 2.2,
+                color: cs.primary.withAlpha(200),
+                backgroundColor: cs.primary.withAlpha(40),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildErrorWidget(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Material(
+      color: cs.surfaceContainerHighest.withAlpha(90),
+      child: InkWell(
+        onTap: _manualRetry,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.broken_image_outlined,
+                color: cs.onSurfaceVariant.withAlpha(140),
+                size: 28,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '点按重试',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: cs.onSurfaceVariant.withAlpha(140),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

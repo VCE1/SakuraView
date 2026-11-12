@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_downloader/flutter_downloader.dart';
 
-// 定义下载入队操作的结果
+/// Result of enqueueing a download task.
 enum EnqueueResult {
   success,
   alreadyInQueue,
@@ -9,7 +9,7 @@ enum EnqueueResult {
   failed,
 }
 
-// “下载中”任务的数据模型 (主要用于安卓)
+/// Active / queued download task model.
 class AppDownloadTask {
   String taskId;
   final String filename;
@@ -30,7 +30,9 @@ class AppDownloadTask {
   });
 
   factory AppDownloadTask.fromDownloaderTask(
-      DownloadTask task, Map<String, dynamic> postData) {
+    DownloadTask task,
+    Map<String, dynamic> postData,
+  ) {
     return AppDownloadTask(
       taskId: task.taskId,
       filename:
@@ -46,7 +48,7 @@ class AppDownloadTask {
   String get fullPath => '$savedDir/$filename';
 }
 
-// “已下载”项目的通用数据模型 (跨平台使用)
+/// Completed download item model (cross-platform).
 class DownloadedItem {
   final String id;
   final String filePath;
@@ -54,6 +56,9 @@ class DownloadedItem {
   final DateTime creationDate;
   final int width;
   final int height;
+  final int fileSizeBytes;
+  final String? author;
+  final String? tags;
 
   DownloadedItem({
     required this.id,
@@ -62,30 +67,29 @@ class DownloadedItem {
     required this.creationDate,
     this.width = 0,
     this.height = 0,
+    this.fileSizeBytes = 0,
+    this.author,
+    this.tags,
   });
 }
 
-// 下载功能的抽象标准 (接口)
+/// Cross-platform download manager interface.
 abstract class BaseDownloadNotifier extends ChangeNotifier {
-  // --- 属性 ---
   bool get isLoadingGallery;
   List<DownloadedItem> get downloadedItems;
   List<AppDownloadTask> get downloadingTasks;
 
-  // --- 主要方法 ---
   Future<EnqueueResult> enqueueDownload(Map<String, dynamic> postData);
   Future<void> deleteDownloadedItem(DownloadedItem item);
   Future<void> scanForDownloadedImages();
   void setupPhotoManagerListener();
 
-  // --- 任务控制 ---
   Future<void> pauseDownload(AppDownloadTask task);
   Future<void> resumeDownload(AppDownloadTask task);
   Future<void> cancelDownload(AppDownloadTask task);
   Future<void> retryDownload(AppDownloadTask task);
   Future<void> removeTask(AppDownloadTask task);
 
-  // --- 全局控制 ---
   Future<void> pauseAllDownloads();
   Future<void> cancelAllDownloads();
   Future<void> refreshTasks();

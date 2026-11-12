@@ -1,4 +1,3 @@
-﻿// ignore: unused_element
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
@@ -8,10 +7,11 @@ import 'package:flutter_downloader/flutter_downloader.dart';
 import 'package:hive/hive.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
-import 'package:photo_manager/photo_manager.dart';
-import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
+import 'package:vce1_sakuraview/api/zerochan_api_client.dart';
 import 'package:vce1_sakuraview/models/post_hive_model.dart';
+import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
 import 'package:vce1_sakuraview/utils/settings_service.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
 
 class AndroidDownloadNotifier extends BaseDownloadNotifier {
   final Logger _logger = Logger('AndroidDownloadNotifier');
@@ -21,10 +21,9 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
       MethodChannel('com.sakuraview.dev/media_scan');
 
   final List<AppDownloadTask> _allTasks = [];
-
-  List<AssetEntity> _downloadedImages = [];
+  List<DownloadedItem> _downloadedItems = [];
   bool _isLoadingGallery = false;
-  bool _isPhotoManagerListenerInitialized = false;
+  bool _isListenerInitialized = false;
   bool _isDisposed = false;
 
   final ReceivePort _port = ReceivePort();
@@ -35,38 +34,25 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
   bool get isLoadingGallery => _isLoadingGallery;
 
   @override
-  List<DownloadedItem> get downloadedItems {
-    return _downloadedImages.map((asset) {
-      String filePathGuess = asset.relativePath ?? '';
-      if (filePathGuess.isNotEmpty && asset.title != null) {
-        filePathGuess += "/${asset.title}";
-      }
-
-      return DownloadedItem(
-        id: asset.id,
-        filePath: filePathGuess,
-        filename: asset.title ?? 'unknown',
-        creationDate: asset.createDateTime,
-        width: asset.width,
-        height: asset.height,
-      );
-    }).toList();
-  }
+  List<DownloadedItem> get downloadedItems => _downloadedItems;
 
   @override
   List<AppDownloadTask> get downloadingTasks => _allTasks
-      .where((task) =>
-          task.status == DownloadTaskStatus.enqueued ||
-          task.status == DownloadTaskStatus.running ||
-          task.status == DownloadTaskStatus.paused)
+      .where(
+        (task) =>
+            task.status == DownloadTaskStatus.enqueued ||
+            task.status == DownloadTaskStatus.running ||
+            task.status == DownloadTaskStatus.paused ||
+            task.status == DownloadTaskStatus.failed,
+      )
       .toList();
 
   AndroidDownloadNotifier() {
     _bindBackgroundIsolate();
     _downloaderInitializedCompleter.future.then((_) {
-      _logger
-          .info('FlutterDownloader is confirmed initialized, loading tasks...');
+      _logger.info('FlutterDownloader initialized, loading tasks & gallery...');
       refreshTasks();
+      scanForDownloadedImages();
     });
   }
 
@@ -79,7 +65,9 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
   void _bindBackgroundIsolate() {
     IsolateNameServer.removePortNameMapping('downloader_send_port');
     IsolateNameServer.registerPortWithName(
-        _port.sendPort, 'downloader_send_port');
+      _port.sendPort,
+      'downloader_send_port',
+    );
 
     _port.listen((dynamic data) async {
       if (_isDisposed) return;
@@ -100,7 +88,7 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
 
         if (status == DownloadTaskStatus.complete) {
           final String fullPath = p.join(task.savedDir, task.filename);
-          _logger.info("Download complete. File saved to: $fullPath");
+          _logger.info('Download complete. File saved to: $fullPath');
 
           try {
             final postHiveModel = PostHiveModel.fromApiMap(task.postData);
@@ -108,16 +96,15 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
 
             final postBox = Hive.box<PostHiveModel>('downloaded_posts');
             await postBox.put(postHiveModel.id, postHiveModel);
-            _logger.info(
-                "Successfully saved/updated metadata and localPath in Hive for post ID: ${postHiveModel.id}");
           } catch (e) {
             _logger.severe(
-                "Failed to save metadata to Hive for post ID: ${task.postData['id']}. Error: $e");
+              'Failed to save metadata to Hive for post ID: ${task.postData['id']}. Error: $e',
+            );
           }
 
-          _scanFile(fullPath);
           _allTasks.removeAt(taskIndex);
           notifyListeners();
+          await _scanFile(fullPath);
         }
       }
     });
@@ -126,13 +113,11 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
   Future<void> _scanFile(String path) async {
     try {
       await _mediaScanChannel.invokeMethod('scanFile', {'path': path});
-      _logger.info("Successfully requested a media scan for: $path");
-      await Future.delayed(const Duration(milliseconds: 2000));
-      if (!_isDisposed) {
-        scanForDownloadedImages();
-      }
     } on PlatformException catch (e) {
-      _logger.severe("Failed to trigger media scan: '${e.message}'.");
+      _logger.fine('Media scan skipped or failed: ${e.message}');
+    } catch (_) {}
+    if (!_isDisposed) {
+      await scanForDownloadedImages();
     }
   }
 
@@ -151,51 +136,61 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
     final postId = postData['id'] as int?;
     if (postId == null) return EnqueueResult.failed;
 
-    final fileExt = postData['file_ext'] as String? ?? 'jpg';
-    final fileName = "$postId.$fileExt";
+    var url = postData['file_url'] as String? ?? '';
+    if (url.isEmpty) return EnqueueResult.failed;
 
-    // 1. 鑾峰彇鐢ㄦ埛褰撳墠璁剧疆鐨勪笅杞借矾寰?
+    if (url.contains('zerochan.net/600/')) {
+      try {
+        final detail = await ZerochanApiClient().getPostDetail(postId.toString());
+        if (detail != null &&
+            detail.fileUrl != null &&
+            detail.fileUrl!.isNotEmpty) {
+          url = detail.fileUrl!;
+          postData['file_url'] = url;
+          if (detail.fileExt != null && detail.fileExt!.isNotEmpty) {
+            postData['file_ext'] = detail.fileExt;
+          }
+        }
+      } catch (e) {
+        _logger.fine('Zerochan detail fetch before download skipped: $e');
+      }
+    }
+
+    final fileExt = postData['file_ext'] as String? ?? 'jpg';
+    final fileName = '$postId.$fileExt';
+
     final String savePath = await _getDownloadPath();
     final targetFile = File(p.join(savePath, fileName));
 
-    // 2. 鏍稿績妫€鏌ワ細鍙叧蹇冩枃浠舵槸鍚﹀凡缁忓瓨鍦ㄤ簬鎴戜滑鏈熸湜鐨勬渶缁堣矾寰?
     if (await targetFile.exists()) {
-      _logger.info(
-          'File for post ID $postId already exists at the target location: ${targetFile.path}.');
-
-      // 纭繚Hive涓殑璁板綍鏄渶鏂扮殑锛屽寘鍚纭殑璺緞
       final postBox = Hive.box<PostHiveModel>('downloaded_posts');
       final postInHive = postBox.get(postId);
-      // 濡傛灉Hive涓病鏈夎褰曪紝鎴栬€呰褰曠殑璺緞涓嶆纭紝鍒欐洿鏂板畠
       if (postInHive == null || postInHive.localPath != targetFile.path) {
         final postHiveModel = PostHiveModel.fromApiMap(postData);
         postHiveModel.localPath = targetFile.path;
         await postBox.put(postId, postHiveModel);
-        _logger
-            .info('Updated Hive for post ID $postId with correct local path.');
       }
+      await scanForDownloadedImages();
       return EnqueueResult.alreadyDownloaded;
     }
 
-    // 3. 濡傛灉鏂囦欢鍦ㄦ柊璺緞涓嶅瓨鍦紝鍒欐棤璁哄浣曢兘搴旇寮€濮嬩笅杞?
-    // 妫€鏌ユ槸鍚﹀凡鍦ㄤ笅杞介槦鍒椾腑锛堥伩鍏嶉噸澶嶆坊鍔犱换鍔★級
     if (_allTasks.any((task) => task.postData['id'] == postId)) {
       return EnqueueResult.alreadyInQueue;
     }
-
-    final url = postData['file_url'] as String? ?? '';
-    if (url.isEmpty) return EnqueueResult.failed;
 
     final saveDir = Directory(savePath);
     if (!await saveDir.exists()) {
       await saveDir.create(recursive: true);
     }
 
+    final headers = resolveSiteImageHeaders(url);
+
     try {
       final taskId = await FlutterDownloader.enqueue(
         url: url,
         savedDir: savePath,
         fileName: fileName,
+        headers: headers,
         showNotification: true,
         openFileFromNotification: true,
         saveInPublicStorage: false,
@@ -217,23 +212,28 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
       }
       return EnqueueResult.failed;
     } catch (e) {
-      _logger.severe("Failed to enqueue download: $e");
+      _logger.severe('Failed to enqueue download: $e');
       return EnqueueResult.failed;
     }
   }
 
-  // ... 鐪佺暐鍏朵粬涓嶅彉鐨勬柟娉?...
-
   @override
   Future<void> pauseDownload(AppDownloadTask task) async =>
       await FlutterDownloader.pause(taskId: task.taskId);
+
   @override
-  Future<void> cancelDownload(AppDownloadTask task) async =>
-      await FlutterDownloader.cancel(taskId: task.taskId);
+  Future<void> cancelDownload(AppDownloadTask task) async {
+    await FlutterDownloader.cancel(taskId: task.taskId);
+    _allTasks.removeWhere((t) => t.taskId == task.taskId);
+    notifyListeners();
+  }
+
   @override
   Future<void> removeTask(AppDownloadTask task) async {
     await FlutterDownloader.remove(
-        taskId: task.taskId, shouldDeleteContent: true);
+      taskId: task.taskId,
+      shouldDeleteContent: true,
+    );
     _allTasks.removeWhere((t) => t.taskId == task.taskId);
     notifyListeners();
   }
@@ -261,8 +261,8 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
 
   @override
   Future<void> cancelAllDownloads() async {
-    for (var task in downloadingTasks) {
-      await cancelDownload(task);
+    for (var task in List<AppDownloadTask>.from(downloadingTasks)) {
+      await removeTask(task);
     }
   }
 
@@ -272,26 +272,33 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
     final tasks = await FlutterDownloader.loadTasks();
     if (tasks == null) return;
     _allTasks.clear();
+    final postBox = Hive.box<PostHiveModel>('downloaded_posts');
     for (var task in tasks) {
-      _allTasks.add(AppDownloadTask.fromDownloaderTask(task, {
-        'id': task.filename?.split('.').first,
-        'preview_url': '',
-        'author': '宸插瓨鍦ㄧ殑浠诲姟',
-        'tags': task.filename,
-      }));
+      if (task.status == DownloadTaskStatus.complete) continue;
+      final idStr = task.filename?.split('.').first ?? '';
+      final parsedId = int.tryParse(idStr);
+      final cachedHive = parsedId != null ? postBox.get(parsedId) : null;
+      _allTasks.add(
+        AppDownloadTask.fromDownloaderTask(
+          task,
+          cachedHive?.toApiMap() ??
+              {
+                'id': parsedId ?? idStr,
+                'preview_url': '',
+                'author': '队列任务',
+                'tags': task.filename ?? '',
+              },
+        ),
+      );
     }
-    notifyListeners();
+    if (!_isDisposed) notifyListeners();
   }
 
   @override
   void setupPhotoManagerListener() {
-    if (_isPhotoManagerListenerInitialized) return;
-    PhotoManager.addChangeCallback((details) {
-      _logger.info("Photo gallery changed, refreshing...");
-      scanForDownloadedImages();
-    });
+    if (_isListenerInitialized) return;
+    _isListenerInitialized = true;
     scanForDownloadedImages();
-    _isPhotoManagerListenerInitialized = true;
   }
 
   @override
@@ -299,57 +306,83 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
     if (_isDisposed) return;
     _isLoadingGallery = true;
     notifyListeners();
-    final ps = await PhotoManager.requestPermissionExtend();
-    if (!ps.isAuth) {
-      _logger.warning('Photo library permission denied');
-      _isLoadingGallery = false;
-      if (!_isDisposed) notifyListeners();
-      return;
-    }
+
     try {
-      final String? customDownloadPath =
-          await _settingsService.getDownloadPath();
+      final String activeDir = await _getDownloadPath();
+      final postBox = Hive.box<PostHiveModel>('downloaded_posts');
+      final Map<String, DownloadedItem> itemsByPath = {};
 
-      List<AssetPathEntity> albums =
-          await PhotoManager.getAssetPathList(type: RequestType.image);
-      List<AssetEntity> allAssets = [];
+      // 1. Scan all records from Hive `downloaded_posts`
+      for (final key in postBox.keys) {
+        final post = postBox.get(key);
+        if (post == null) continue;
+        final ext = post.fileExt ?? 'jpg';
+        final filename = '${post.id}.$ext';
+        final candidatePaths = <String>{
+          if (post.localPath != null && post.localPath!.isNotEmpty)
+            post.localPath!,
+          p.join(activeDir, filename),
+        };
 
-      if (customDownloadPath != null && customDownloadPath.isNotEmpty) {
-        _logger.info('Scanning custom download path: $customDownloadPath');
-        for (final album in albums) {
-          final assetsInAlbum = await album.getAssetListRange(
-              start: 0, end: await album.assetCountAsync);
-          for (final asset in assetsInAlbum) {
-            final file = await asset.originFile;
-            if (file != null && file.path.startsWith(customDownloadPath)) {
-              allAssets.add(asset);
-            }
-          }
-        }
-      } else {
-        final defaultPath = await _settingsService.getDefaultDownloadPath();
-        final defaultAlbumName =
-            p.basename(p.dirname(defaultPath)); // e.g., Pictures
-        final appAlbumName = p.basename(defaultPath); // e.g., vce1.sakuraview
-
-        for (final album in albums) {
-          if (album.name.toLowerCase() == appAlbumName.toLowerCase() ||
-              album.name.toLowerCase() == defaultAlbumName.toLowerCase()) {
-            _logger.info("Scanning potential album: ${album.name}");
-            final assetsInAlbum = await album.getAssetListRange(
-                start: 0, end: await album.assetCountAsync);
-            allAssets.addAll(assetsInAlbum.where((asset) =>
-                asset.relativePath?.contains(appAlbumName) ?? false));
+        for (final path in candidatePaths) {
+          final file = File(path);
+          if (await file.exists()) {
+            final stat = await file.stat();
+            itemsByPath[file.path] = DownloadedItem(
+              id: post.id.toString(),
+              filePath: file.path,
+              filename: p.basename(file.path),
+              creationDate: stat.modified,
+              width: post.width ?? 0,
+              height: post.height ?? 0,
+              fileSizeBytes: stat.size,
+              author: post.author,
+              tags: post.tags,
+            );
+            break;
           }
         }
       }
 
-      _downloadedImages = allAssets.toSet().toList();
-      _downloadedImages
-          .sort((a, b) => b.createDateTime.compareTo(a.createDateTime));
+      // 2. Also scan the active download directory directly for any image files
+      final dir = Directory(activeDir);
+      if (await dir.exists()) {
+        await for (final entity in dir.list(followLinks: false)) {
+          if (entity is File) {
+            final lower = entity.path.toLowerCase();
+            if (lower.endsWith('.jpg') ||
+                lower.endsWith('.jpeg') ||
+                lower.endsWith('.png') ||
+                lower.endsWith('.webp') ||
+                lower.endsWith('.gif')) {
+              if (!itemsByPath.containsKey(entity.path)) {
+                final stat = await entity.stat();
+                final base = p.basename(entity.path);
+                final idPart = base.split('.').first;
+                final postId = int.tryParse(idPart);
+                final hivePost = postId != null ? postBox.get(postId) : null;
+                itemsByPath[entity.path] = DownloadedItem(
+                  id: idPart,
+                  filePath: entity.path,
+                  filename: base,
+                  creationDate: stat.modified,
+                  width: hivePost?.width ?? 0,
+                  height: hivePost?.height ?? 0,
+                  fileSizeBytes: stat.size,
+                  author: hivePost?.author,
+                  tags: hivePost?.tags,
+                );
+              }
+            }
+          }
+        }
+      }
+
+      final sorted = itemsByPath.values.toList()
+        ..sort((a, b) => b.creationDate.compareTo(a.creationDate));
+      _downloadedItems = sorted;
     } catch (e, s) {
-      _logger.severe("鎵弿鐩稿唽鏃跺嚭閿?", e, s);
-      _downloadedImages = [];
+      _logger.severe('Error scanning downloaded images', e, s);
     } finally {
       _isLoadingGallery = false;
       if (!_isDisposed) notifyListeners();
@@ -366,20 +399,22 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
         final postBox = Hive.box<PostHiveModel>('downloaded_posts');
         if (postBox.containsKey(postId)) {
           await postBox.delete(postId);
-          _logger.info("Deleted metadata from Hive for post ID: $postId");
         }
       }
 
-      final List<String> result =
-          await PhotoManager.editor.deleteWithIds([item.id]);
-
-      if (result.isNotEmpty) {
-        _downloadedImages.removeWhere((a) => a.id == item.id);
-        notifyListeners();
-        _logger.info("Successfully deleted file with assetId: ${item.id}");
+      if (item.filePath.isNotEmpty) {
+        final file = File(item.filePath);
+        if (await file.exists()) {
+          await file.delete();
+        }
       }
+
+      _downloadedItems.removeWhere(
+        (a) => a.filePath == item.filePath || a.id == item.id,
+      );
+      if (!_isDisposed) notifyListeners();
     } catch (e) {
-      _logger.severe("鍒犻櫎鍥剧墖鏃跺嚭閿? $e");
+      _logger.severe('Error deleting downloaded item: $e');
     }
   }
 
@@ -391,7 +426,7 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
         try {
           await dir.create(recursive: true);
         } catch (e) {
-          _logger.severe('鍒涘缓鐢ㄦ埛鑷畾涔夌洰褰曞け璐? $customPath, 閿欒: $e');
+          _logger.warning('Failed to create custom dir $customPath: $e');
         }
       }
       if (await dir.exists()) {
@@ -409,4 +444,3 @@ class AndroidDownloadNotifier extends BaseDownloadNotifier {
     super.dispose();
   }
 }
-

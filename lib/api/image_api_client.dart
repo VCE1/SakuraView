@@ -11,17 +11,34 @@ abstract class ImageApiClient {
   final ImageSite site;
   final String apiKey;
   final String username;
+  final String cookies;
+  final String userAgent;
 
   ImageApiClient({
     required this.site,
     this.apiKey = '',
     this.username = '',
+    this.cookies = '',
+    this.userAgent = '',
   });
 
-  Map<String, String> get headers => {
-        'Content-Type': 'application/json',
-        'User-Agent': 'vce1.sakuraview/1.1 (vce1)',
-      };
+  bool get hasAccountConfigured =>
+      username.trim().isNotEmpty ||
+      apiKey.trim().isNotEmpty ||
+      cookies.trim().isNotEmpty;
+
+  Map<String, String> get headers {
+    final map = <String, String>{
+      'Content-Type': 'application/json',
+      'User-Agent': userAgent.trim().isNotEmpty
+          ? userAgent.trim()
+          : 'vce1.sakuraview/1.2 (vce1)',
+    };
+    if (cookies.trim().isNotEmpty) {
+      map['Cookie'] = cookies.trim();
+    }
+    return map;
+  }
 
   Uri buildUri(String path, Map<String, String> queryParams) {
     final base = Uri.parse(site.apiBaseUrl);
@@ -29,15 +46,15 @@ abstract class ImageApiClient {
   }
 
   Future<http.Response> httpGet(Uri uri, {Map<String, String>? headers}) async {
+    final effectiveHeaders = headers ?? this.headers;
     _log.info('--- httpGet ---');
     _log.info('site=${site.name}  url=${uri.toString()}');
-    _log.info('headers=${headers ?? this.headers}');
 
     final client = await ProxyConfig.createClient();
     final sw = Stopwatch()..start();
 
     try {
-      final response = await client.get(uri, headers: headers ?? this.headers);
+      final response = await client.get(uri, headers: effectiveHeaders);
       sw.stop();
       _log.info('=> HTTP ${response.statusCode} in ${sw.elapsedMilliseconds}ms');
       _log.fine('=> body length=${response.body.length}');
@@ -60,6 +77,13 @@ abstract class ImageApiClient {
     bool safeMode = false,
   });
 
+  /// Fetches the logged-in user's cloud favorites for [site].
+  Future<List<PostHiveModel>> fetchCloudFavorites({
+    int page = 1,
+    int limit = 40,
+    bool safeMode = false,
+  });
+
   Future<PostHiveModel?> getPostDetail(String id);
 
   Future<List<String>> searchTags(String query);
@@ -67,7 +91,11 @@ abstract class ImageApiClient {
   Future<List<Map<String, dynamic>>> fetchChildPosts(int parentId) async {
     try {
       final posts = await searchPosts(tags: 'parent:$parentId', limit: 100);
-      return posts.map((p) => p.toApiMap()).toList();
+      return posts.map((p) {
+        final map = p.toApiMap();
+        map['site'] = site.name;
+        return map;
+      }).toList();
     } catch (e) {
       _log.warning('fetchChildPosts($parentId) on ${site.name} failed: $e');
       return [];

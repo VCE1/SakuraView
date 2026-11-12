@@ -7,38 +7,38 @@ import 'package:http/io_client.dart';
 import 'package:logging/logging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Standards-compliant proxy modes following Google / Android networking guidelines.
+/// Standards-compliant network proxy modes.
 enum ProxyMode {
-  /// Uses the OS / Wi-Fi mounted proxy (`ConnectivityManager.getDefaultProxy()` on Android,
-  /// or `HTTP_PROXY`/`HTTPS_PROXY` environment variables on desktop), falling back to `DIRECT`
-  /// (which also transparently flows through Android VpnService TUN interfaces).
+  /// Honors the operating system's global proxy configuration (`ConnectivityManager.getDefaultProxy()`
+  /// on Android, or `HTTP_PROXY`/`HTTPS_PROXY` environment variables on desktop), falling back to
+  /// `DIRECT` (which also routes transparently through system VPN / TUN interfaces).
   system,
 
-  /// Uses a user-specified HTTP proxy (`host:port`).
+  /// Uses a user-configured HTTP/HTTPS proxy endpoint (`host:port`).
   manual,
 
-  /// Forces direct connection (`DIRECT`), bypassing any HTTP proxy.
+  /// Forces direct network connections (`DIRECT`), bypassing any HTTP proxy configuration.
   none;
 
   String get label {
     switch (this) {
       case ProxyMode.system:
-        return 'System Default (Wi-Fi / OS Proxy)';
+        return '跟随系统代理 (System Proxy)';
       case ProxyMode.manual:
-        return 'Manual Proxy';
+        return '自定义代理 (Custom HTTP Proxy)';
       case ProxyMode.none:
-        return 'Direct Connection (No Proxy)';
+        return '直连模式 (Direct Connection)';
     }
   }
 
   String get subtitle {
     switch (this) {
       case ProxyMode.system:
-        return 'Accept default system, Wi-Fi mounted proxy, or VPN';
+        return '自动读取操作系统网络代理配置或系统级 TUN/VPN 隧道';
       case ProxyMode.manual:
-        return 'Manually specify HTTP proxy host and port';
+        return '手动指定 HTTP 代理服务器主机地址与端口 (Host:Port)';
       case ProxyMode.none:
-        return 'Connect directly without HTTP proxy';
+        return '绕过 HTTP 代理配置，直接连接目标站点服务器';
     }
   }
 
@@ -55,7 +55,7 @@ enum ProxyMode {
   }
 }
 
-/// Information about the currently detected OS / Wi-Fi proxy.
+/// Information about the currently detected operating system network proxy.
 class SystemProxyInfo {
   final String host;
   final int port;
@@ -66,7 +66,7 @@ class SystemProxyInfo {
     required this.host,
     required this.port,
     this.nonProxyHosts = const [],
-    this.source = 'system',
+    this.source = 'System Network',
   });
 
   String get address => '$host:$port';
@@ -168,7 +168,6 @@ class ProxyConfig {
   }
 
   /// Reads the current [ProxyMode] from SharedPreferences.
-  /// Migrates legacy `enableProxy` boolean if `proxyMode` has not been set yet.
   static Future<ProxyMode> getProxyMode() async {
     final prefs = await SharedPreferences.getInstance();
     final modeStr = prefs.getString(_modeKey);
@@ -176,7 +175,6 @@ class ProxyConfig {
       _cachedMode = ProxyMode.fromString(modeStr);
       return _cachedMode;
     }
-    // Default to ProxyMode.system so the app accepts Wi-Fi / OS proxy out-of-the-box.
     _cachedMode = ProxyMode.system;
     return _cachedMode;
   }
@@ -221,9 +219,8 @@ class ProxyConfig {
     }
   }
 
-  /// Queries Android Wi-Fi / OS default proxy or desktop environment proxy.
+  /// Queries the operating system network proxy settings.
   static Future<SystemProxyInfo?> getSystemProxyInfo() async {
-    // 1. On Android, query ConnectivityManager.getDefaultProxy() / System.getProperty via MethodChannel
     if (!kIsWeb && Platform.isAndroid) {
       try {
         final result = await _androidProxyChannel
@@ -242,7 +239,7 @@ class ProxyConfig {
               host: host,
               port: port,
               nonProxyHosts: exclusions,
-              source: 'Android Wi-Fi / System Proxy',
+              source: 'Android ConnectivityManager',
             );
             _cachedSystemProxy = info;
             return info;
@@ -253,7 +250,6 @@ class ProxyConfig {
       }
     }
 
-    // 2. Check OS environment variables (HTTP_PROXY / HTTPS_PROXY / NO_PROXY)
     final envProxy = _readEnvironmentProxy();
     if (envProxy != null && envProxy.isValid) {
       _cachedSystemProxy = envProxy;
@@ -313,12 +309,12 @@ class ProxyConfig {
       if (rule == '*') return true;
       if (lowerHost == rule) return true;
       if (rule.startsWith('*.')) {
-        final suffix = rule.substring(1); // e.g. ".local"
+        final suffix = rule.substring(1);
         if (lowerHost.endsWith(suffix)) return true;
       } else if (rule.startsWith('.')) {
         if (lowerHost.endsWith(rule)) return true;
       } else if (rule.endsWith('.*')) {
-        final prefix = rule.substring(0, rule.length - 1); // e.g. "192.168.6."
+        final prefix = rule.substring(0, rule.length - 1);
         if (lowerHost.startsWith(prefix)) return true;
       }
     }
@@ -440,7 +436,7 @@ class ProxyConfig {
       client = await createClient();
       final resp = await client.get(
         testUri,
-        headers: const {'User-Agent': 'vce1.sakuraview/1.1'},
+        headers: const {'User-Agent': 'vce1.sakuraview/1.2'},
       ).timeout(timeout);
       sw.stop();
       final ok = resp.statusCode >= 200 && resp.statusCode < 400;
@@ -461,7 +457,7 @@ class ProxyConfig {
         success: false,
         elapsedMs: sw.elapsedMilliseconds,
         effectiveDirective: directive,
-        errorMessage: 'Connection timed out (${timeout.inSeconds}s)',
+        errorMessage: '连接超时 (${timeout.inSeconds}s)',
       );
     } on SocketException catch (e) {
       sw.stop();
@@ -470,7 +466,7 @@ class ProxyConfig {
         success: false,
         elapsedMs: sw.elapsedMilliseconds,
         effectiveDirective: directive,
-        errorMessage: 'Socket error: ${e.message}',
+        errorMessage: '网络套接字错误: ${e.message}',
       );
     } on HttpException catch (e) {
       sw.stop();
@@ -479,7 +475,7 @@ class ProxyConfig {
         success: false,
         elapsedMs: sw.elapsedMilliseconds,
         effectiveDirective: directive,
-        errorMessage: 'HTTP error: ${e.message}',
+        errorMessage: 'HTTP 协议错误: ${e.message}',
       );
     } catch (e, st) {
       sw.stop();

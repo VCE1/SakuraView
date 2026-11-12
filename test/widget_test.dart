@@ -271,20 +271,20 @@ void main() {
 
       debugPrint('[BENCHMARK] ProxySettingsPage initial render & settle: ${sw.elapsedMilliseconds}ms');
 
-      expect(find.text('System Default (Wi-Fi / OS Proxy)'), findsOneWidget);
-      expect(find.text('Manual Proxy'), findsOneWidget);
-      expect(find.text('Direct Connection (No Proxy)'), findsOneWidget);
+      expect(find.text('跟随系统代理 (System Proxy)'), findsOneWidget);
+      expect(find.text('自定义代理 (Custom HTTP Proxy)'), findsOneWidget);
+      expect(find.text('直连模式 (Direct Connection)'), findsOneWidget);
 
       // Switch to Manual Proxy mode and verify input field appears
-      await tester.tap(find.text('Manual Proxy'));
+      await tester.tap(find.text('自定义代理 (Custom HTTP Proxy)'));
       await tester.pumpAndSettle();
-      expect(find.text('Manual HTTP Proxy Address'), findsOneWidget);
-      expect(find.text('192.168.6.233:7890'), findsWidgets);
+      expect(find.text('自定义 HTTP 代理服务器'), findsOneWidget);
+      expect(find.text('127.0.0.1:7890'), findsWidgets);
 
       // Switch to Direct Connection mode
-      await tester.tap(find.text('Direct Connection (No Proxy)'));
+      await tester.tap(find.text('直连模式 (Direct Connection)'));
       await tester.pumpAndSettle();
-      expect(find.text('Manual HTTP Proxy Address'), findsNothing);
+      expect(find.text('自定义 HTTP 代理服务器'), findsNothing);
     });
   });
 }

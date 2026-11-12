@@ -18,9 +18,10 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
   String? _validationError;
 
   static const List<String> _presetAddresses = [
-    '192.168.6.233:7890',
-    '10.0.2.2:7890',
     '127.0.0.1:7890',
+    '127.0.0.1:10809',
+    '10.0.2.2:7890',
+    '192.168.6.233:7890',
   ];
 
   @override
@@ -56,7 +57,7 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
     final normalized = ProxyConfig.normalizeProxyAddress(_proxyController.text);
     if (_mode == ProxyMode.manual && !ProxyConfig.isValidProxyAddress(normalized)) {
       setState(() {
-        _validationError = 'Invalid format. Expected host:port (e.g. 192.168.6.233:7890)';
+        _validationError = '格式无效，请输入 Host:Port（例如 127.0.0.1:7890）';
       });
       return false;
     }
@@ -72,7 +73,7 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
     if (showSnack && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Proxy mode saved: ${_mode.label}'),
+          content: Text('网络代理配置已保存：${_mode.label}'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -108,13 +109,14 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final cs = theme.colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Proxy Settings'),
+        title: const Text('网络与代理设置'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh System / Wi-Fi Proxy',
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: '重新检测系统代理状态',
             onPressed: _refreshSystemProxy,
           ),
         ],
@@ -145,9 +147,9 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                           Padding(
                             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                             child: Text(
-                              'Proxy Mode',
+                              '代理路由策略',
                               style: theme.textTheme.titleSmall?.copyWith(
-                                color: theme.colorScheme.primary,
+                                color: cs.primary,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -155,7 +157,10 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                           ...ProxyMode.values.map((m) {
                             return RadioListTile<ProxyMode>(
                               value: m,
-                              title: Text(m.label),
+                              title: Text(
+                                m.label,
+                                style: const TextStyle(fontWeight: FontWeight.w600),
+                              ),
                               subtitle: Text(
                                 m.subtitle,
                                 style: const TextStyle(fontSize: 12),
@@ -176,8 +181,8 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                     Expanded(
                       child: FilledButton.icon(
                         onPressed: () => _saveProxySettings(showSnack: true),
-                        icon: const Icon(Icons.save_outlined, size: 18),
-                        label: const Text('Save'),
+                        icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
+                        label: const Text('应用并保存'),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -190,8 +195,8 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                                 height: 16,
                                 child: CircularProgressIndicator(strokeWidth: 2),
                               )
-                            : const Icon(Icons.wifi_find, size: 18),
-                        label: Text(_testing ? 'Testing...' : 'Test Connection'),
+                            : const Icon(Icons.network_check_rounded, size: 18),
+                        label: Text(_testing ? '正在检测连通性...' : '连通性测试'),
                       ),
                     ),
                   ],
@@ -207,6 +212,7 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
 
   Widget _buildSystemProxyCard(ThemeData theme) {
     final detected = _systemProxy;
+    final cs = theme.colorScheme;
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -217,14 +223,14 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
             Row(
               children: [
                 Icon(
-                  detected != null ? Icons.wifi_tethering : Icons.public,
-                  color: theme.colorScheme.primary,
+                  detected != null ? Icons.hub_rounded : Icons.public_rounded,
+                  color: cs.primary,
                   size: 20,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Detected System / Wi-Fi Proxy',
+                    '当前系统网络环境状态',
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
@@ -232,24 +238,24 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                 ),
                 TextButton.icon(
                   onPressed: _refreshSystemProxy,
-                  icon: const Icon(Icons.sync, size: 16),
-                  label: const Text('Detect'),
+                  icon: const Icon(Icons.sync_rounded, size: 16),
+                  label: const Text('刷新'),
                 ),
               ],
             ),
             const SizedBox(height: 8),
             Text(
               detected != null
-                  ? 'Active Proxy: ${detected.address}\nSource: ${detected.source}'
-                  : 'No HTTP proxy mounted on Wi-Fi / OS.\nUsing direct / VPN connection (DIRECT).',
+                  ? '已检测到系统代理：${detected.address}\n配置来源：${detected.source}'
+                  : '未检测到显式系统 HTTP 代理。\n网络请求将通过系统默认网卡或 TUN 虚拟网卡直接路由 (DIRECT)。',
               style: theme.textTheme.bodyMedium,
             ),
             if (detected != null && detected.nonProxyHosts.isNotEmpty) ...[
               const SizedBox(height: 6),
               Text(
-                'Bypass hosts: ${detected.nonProxyHosts.join(", ")}',
+                '绕过规则：${detected.nonProxyHosts.join(", ")}',
                 style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                  color: cs.onSurfaceVariant,
                 ),
               ),
             ],
@@ -268,7 +274,7 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Manual HTTP Proxy Address',
+              '自定义 HTTP 代理服务器',
               style: theme.textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
@@ -277,9 +283,8 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
             TextField(
               controller: _proxyController,
               decoration: InputDecoration(
-                border: const OutlineInputBorder(),
-                hintText: 'e.g. 192.168.6.233:7890',
-                labelText: 'Proxy Host:Port',
+                hintText: '例如 127.0.0.1:7890',
+                labelText: '代理地址 (Host:Port)',
                 errorText: _validationError,
                 prefixIcon: const Icon(Icons.dns_outlined),
               ),
@@ -291,7 +296,14 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                 });
               },
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
+            Text(
+              '常用预设端口：',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 6),
             Wrap(
               spacing: 8,
               runSpacing: 6,
@@ -324,7 +336,7 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(
-              res.success ? Icons.check_circle : Icons.error_outline,
+              res.success ? Icons.check_circle_rounded : Icons.error_outline_rounded,
               color: color,
               size: 22,
             ),
@@ -335,8 +347,8 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                 children: [
                   Text(
                     res.success
-                        ? 'Connection successful (${res.elapsedMs} ms)'
-                        : 'Connection failed (${res.elapsedMs} ms)',
+                        ? '站点连通性正常 (${res.elapsedMs} ms)'
+                        : '连接失败 (${res.elapsedMs} ms)',
                     style: TextStyle(
                       color: color,
                       fontWeight: FontWeight.bold,
@@ -344,7 +356,7 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Route: ${res.effectiveDirective}',
+                    '生效路由指令：${res.effectiveDirective}',
                     style: theme.textTheme.bodySmall,
                   ),
                   if (res.errorMessage != null) ...[

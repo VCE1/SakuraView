@@ -7,16 +7,46 @@ import 'package:vce1_sakuraview/models/site_config.dart';
 import 'package:logging/logging.dart';
 
 class YandereApiClient extends ImageApiClient {
-  YandereApiClient({super.apiKey, super.username})
-      : super(site: ImageSite.yandere);
+  YandereApiClient({
+    super.apiKey,
+    super.username,
+    super.cookies,
+    super.userAgent,
+  }) : super(site: ImageSite.yandere);
 
   static final _logger = Logger('YandereApiClient');
 
   @override
-  Map<String, String> get headers => {
-        'Content-Type': 'application/json',
-        'User-Agent': 'vce1.sakuraview/1.1 (vce1)',
-      };
+  Map<String, String> get headers {
+    final map = <String, String>{
+      'Content-Type': 'application/json',
+      'User-Agent': userAgent.trim().isNotEmpty
+          ? userAgent.trim()
+          : 'vce1.sakuraview/1.2 (vce1)',
+    };
+    if (cookies.trim().isNotEmpty) {
+      map['Cookie'] = cookies.trim();
+    }
+    return map;
+  }
+
+  @override
+  Future<List<PostHiveModel>> fetchCloudFavorites({
+    int page = 1,
+    int limit = 40,
+    bool safeMode = false,
+  }) async {
+    final targetUser = username.trim();
+    if (targetUser.isEmpty) {
+      throw ApiException('请先在站点设置中配置 Yande.re 用户名或通过 WebView 登录以同步云端收藏夹');
+    }
+    return searchPosts(
+      tags: 'vote:3:$targetUser order:vote',
+      page: page,
+      limit: limit,
+      safeMode: safeMode,
+    );
+  }
 
   @override
   Future<List<PostHiveModel>> searchPosts({

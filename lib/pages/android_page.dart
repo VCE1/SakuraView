@@ -20,6 +20,7 @@ import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
 import 'package:vce1_sakuraview/widgets/common/telegram_floating_nav_bar.dart';
+import 'package:vce1_sakuraview/pages/site_accounts_page.dart';
 
 class AndroidImageGridPage extends StatefulWidget {
   const AndroidImageGridPage({super.key});
@@ -226,29 +227,38 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
     final double bottomContentPadding =
         media.padding.bottom + (isLandscape ? 66.0 : 80.0);
 
-    return Consumer<FavoritesNotifier>(
-      builder: (context, favoritesNotifier, child) {
-        return Consumer<SiteConfigProvider>(
-          builder: (context, siteConfig, _) {
-            Widget bodyContent;
+    return PopScope(
+      canPop: !showFavoritesView && _currentTabIndex == 0,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        setState(() {
+          showFavoritesView = false;
+          _currentTabIndex = 0;
+          _navBarVisible = true;
+        });
+      },
+      child: Consumer<FavoritesNotifier>(
+        builder: (context, favoritesNotifier, child) {
+          return Consumer<SiteConfigProvider>(
+            builder: (context, siteConfig, _) {
+              Widget bodyContent;
 
-            if (_currentTabIndex == 1) {
-              bodyContent = Padding(
-                key: const ValueKey<String>('tab_search'),
-                padding: EdgeInsets.only(
-                  top: topContentPadding,
-                  bottom: isLandscape ? 8 : 12,
-                ),
-                child: SearchPage(initialTag: _searchTag),
-              );
-            } else if (showFavoritesView) {
-              bodyContent = FavoriteDisplayWidget(
-                key: const ValueKey<String>('tab_favorites'),
-                favoriteItems: favoritesNotifier.favoriteItems,
-                topPadding: topContentPadding,
-                bottomPadding: bottomContentPadding,
-              );
-            } else if (imageList.isEmpty && isLoading) {
+              if (_currentTabIndex == 1) {
+                bodyContent = Padding(
+                  key: const ValueKey<String>('tab_search'),
+                  padding: EdgeInsets.only(
+                    top: topContentPadding,
+                    bottom: isLandscape ? 8 : 12,
+                  ),
+                  child: SearchPage(initialTag: _searchTag),
+                );
+              } else if (showFavoritesView) {
+                bodyContent = FavoriteDisplayWidget(
+                  key: const ValueKey<String>('tab_favorites'),
+                  topPadding: topContentPadding,
+                  bottomPadding: bottomContentPadding,
+                );
+              } else if (imageList.isEmpty && isLoading) {
               bodyContent = Padding(
                 key: ValueKey<String>('shimmer_${siteConfig.config.site.name}'),
                 padding: EdgeInsets.only(top: topContentPadding),
@@ -558,58 +568,74 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
                   Navigator.pop(context);
                 },
               ),
-              body: Container(
-                width: double.infinity,
-                height: double.infinity,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Theme.of(context).colorScheme.surface.withAlpha(200),
-                      Theme.of(context).scaffoldBackgroundColor,
-                    ],
+              body: NotificationListener<UserScrollNotification>(
+                onNotification: (notification) {
+                  if (notification.direction == ScrollDirection.reverse && _navBarVisible) {
+                    setState(() => _navBarVisible = false);
+                  } else if (notification.direction == ScrollDirection.forward && !_navBarVisible) {
+                    setState(() => _navBarVisible = true);
+                  }
+                  return false;
+                },
+                child: Container(
+                  width: double.infinity,
+                  height: double.infinity,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Theme.of(context).colorScheme.surface.withAlpha(200),
+                        Theme.of(context).scaffoldBackgroundColor,
+                      ],
+                    ),
+                  ),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 240),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    transitionBuilder: (child, animation) {
+                      return SakuraEntranceTransition(
+                        animation: animation,
+                        child: child,
+                      );
+                    },
+                    child: bodyContent,
                   ),
                 ),
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 240),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  transitionBuilder: (child, animation) {
-                    return SakuraEntranceTransition(
-                      animation: animation,
-                      child: child,
-                    );
-                  },
-                  child: bodyContent,
-                ),
               ),
-              bottomNavigationBar: TelegramFloatingNavBar(
-                currentIndex: _currentTabIndex,
-                visible: _navBarVisible,
-                onDestinationSelected: (index) {
-                  setState(() {
-                    _navBarVisible = true;
-                    if (index == 3) {
-                      Navigator.pushNamed(context, '/downloads');
-                      return;
-                    }
-                    _currentTabIndex = index;
-                    if (index == 1) {
-                      _searchTag = null;
-                    } else if (index == 0) {
-                      showFavoritesView = false;
-                      if (imageList.isEmpty) fetchImages(clear: true);
-                    } else if (index == 2) {
-                      showFavoritesView = true;
-                    }
-                  });
+              bottomNavigationBar: Consumer<BaseDownloadNotifier>(
+                builder: (context, dlNotifier, _) {
+                  return TelegramFloatingNavBar(
+                    currentIndex: _currentTabIndex,
+                    visible: _navBarVisible,
+                    activeDownloadCount: dlNotifier.downloadingTasks.length,
+                    onDestinationSelected: (index) {
+                      setState(() {
+                        _navBarVisible = true;
+                        if (index == 3) {
+                          Navigator.pushNamed(context, '/downloads');
+                          return;
+                        }
+                        _currentTabIndex = index;
+                        if (index == 1) {
+                          _searchTag = null;
+                        } else if (index == 0) {
+                          showFavoritesView = false;
+                          if (imageList.isEmpty) fetchImages(clear: true);
+                        } else if (index == 2) {
+                          showFavoritesView = true;
+                        }
+                      });
+                    },
+                  );
                 },
               ),
             );
           },
         );
       },
+    ),
     );
   }
 
@@ -901,92 +927,265 @@ class _GlassAppBarBackground extends StatelessWidget {
   }
 }
 
-class FavoriteDisplayWidget extends StatelessWidget {
-  final List<Map<String, dynamic>> favoriteItems;
+class FavoriteDisplayWidget extends StatefulWidget {
   final double topPadding;
   final double bottomPadding;
 
   const FavoriteDisplayWidget({
     super.key,
-    required this.favoriteItems,
     this.topPadding = 64.0,
     this.bottomPadding = 80.0,
   });
 
   @override
-  Widget build(BuildContext context) {
-    if (favoriteItems.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.favorite_outline, size: 64, color: Colors.grey[300]),
-            const SizedBox(height: 16),
-            Text(
-              'No favorites yet',
-              style: TextStyle(color: Colors.grey[500], fontSize: 16),
-            ),
-          ],
+  State<FavoriteDisplayWidget> createState() => _FavoriteDisplayWidgetState();
+}
+
+class _FavoriteDisplayWidgetState extends State<FavoriteDisplayWidget> {
+  int _favoriteMode = 0; // 0: 本地离线, 1: 云端账号
+
+  void _syncCloudToLocal() async {
+    final notifier = context.read<FavoritesNotifier>();
+    final count = await notifier.syncCloudToLocal();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已成功将 $count 张云端收藏同步转存至本地离线数据库'),
+          behavior: SnackBarBehavior.floating,
         ),
       );
     }
-    final width = MediaQuery.of(context).size.width;
-    final cols = (width / 170).floor().clamp(2, 7);
+  }
 
-    return MasonryGridView.count(
-      padding: EdgeInsets.fromLTRB(10, topPadding, 10, bottomPadding),
-      crossAxisCount: cols,
-      mainAxisSpacing: 8,
-      crossAxisSpacing: 8,
-      itemCount: favoriteItems.length,
-      itemBuilder: (context, index) {
-        final item = favoriteItems[index];
-        final String imageUrl = item['sample_url'] as String? ??
-            item['preview_url'] as String? ??
-            '';
-        final num imgWidth =
-            item['width'] as num? ?? item['sample_width'] as num? ?? 1;
-        final num imgHeight =
-            item['height'] as num? ?? item['sample_height'] as num? ?? 1;
-        final double aspectRatio = (imgWidth <= 0 || imgHeight <= 0)
-            ? 1.0
-            : (imgWidth / imgHeight).clamp(0.42, 2.4);
+  void _refreshCloud() {
+    final siteConfig = context.read<SiteConfigProvider>();
+    context.read<FavoritesNotifier>().fetchCloudFavorites(siteConfig);
+  }
 
-        return Card(
-          clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12.0),
-          ),
-          child: InkWell(
-            onTap: () {
-              final hasChildren = item['has_children'] as bool? ?? false;
-              if (hasChildren) {
-                Navigator.push(
-                  context,
-                  SakuraPageRoute(
-                    builder: (_) => GroupPostsScreen(parentPost: item),
-                  ),
-                );
-                return;
-              }
-              Navigator.push(
-                context,
-                SakuraPageRoute(
-                  builder: (context) =>
-                      AndroidFullImageScreen(postData: item),
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final favNotifier = context.watch<FavoritesNotifier>();
+    final siteConfig = context.watch<SiteConfigProvider>();
+    final isCloud = _favoriteMode == 1;
+    final items = isCloud ? favNotifier.cloudItems : favNotifier.favoriteItems;
+    final creds = siteConfig.credentialsFor(siteConfig.config.site);
+    final hasUserOrCookie = creds.username.isNotEmpty || creds.cookies.isNotEmpty;
+
+    return Column(
+      children: [
+        SizedBox(height: widget.topPadding),
+        // Mode Selector Bar
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: SegmentedButton<int>(
+                  segments: [
+                    ButtonSegment<int>(
+                      value: 0,
+                      label: Text('本地离线 (${favNotifier.favoriteItems.length})'),
+                      icon: const Icon(Icons.offline_pin_outlined, size: 16),
+                    ),
+                    ButtonSegment<int>(
+                      value: 1,
+                      label: Text('云端账号 (${favNotifier.cloudItems.length})'),
+                      icon: const Icon(Icons.cloud_outlined, size: 16),
+                    ),
+                  ],
+                  selected: {_favoriteMode},
+                  onSelectionChanged: (set) {
+                    setState(() => _favoriteMode = set.first);
+                    if (set.first == 1 &&
+                        favNotifier.cloudItems.isEmpty &&
+                        !favNotifier.isCloudLoading &&
+                        hasUserOrCookie) {
+                      _refreshCloud();
+                    }
+                  },
                 ),
-              );
-            },
-            child: AspectRatio(
-              aspectRatio: aspectRatio,
-              child: SakuraAnimatedImage(
-                imageUrl: imageUrl,
-                fit: BoxFit.cover,
+              ),
+              if (isCloud && hasUserOrCookie) ...[
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  tooltip: '一键将云端收藏同步至本地',
+                  icon: const Icon(Icons.sync_alt_rounded, size: 20),
+                  onPressed: favNotifier.cloudItems.isNotEmpty ? _syncCloudToLocal : null,
+                ),
+                IconButton.filledTonal(
+                  tooltip: '刷新云端收藏',
+                  icon: const Icon(Icons.refresh_rounded, size: 20),
+                  onPressed: _refreshCloud,
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (isCloud && !hasUserOrCookie)
+          Expanded(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.account_circle_outlined, size: 56, color: cs.primary),
+                    const SizedBox(height: 16),
+                    Text(
+                      '未配置 ${siteConfig.config.site.displayName} 账号',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '请先配置用户名或通过内置网页登录获取会话 Cookie，即可直接同步与浏览您的云端收藏夹。',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const SiteAccountsPage()),
+                        ).then((_) {
+                          if (mounted) _refreshCloud();
+                        });
+                      },
+                      icon: const Icon(Icons.login_rounded),
+                      label: const Text('前往配置或登录账号'),
+                    ),
+                  ],
+                ),
               ),
             ),
+          )
+        else if (isCloud && favNotifier.isCloudLoading)
+          const Expanded(
+            child: Center(
+              child: SakuraLoader(size: 32),
+            ),
+          )
+        else if (isCloud && favNotifier.cloudError != null)
+          Expanded(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(
+                      Icons.error_outline_rounded,
+                      size: 52,
+                      color: Colors.orangeAccent,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '加载云端收藏失败\n${favNotifier.cloudError}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton.tonalIcon(
+                      onPressed: _refreshCloud,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('重试'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else if (items.isEmpty)
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    isCloud ? Icons.cloud_off_rounded : Icons.favorite_outline_rounded,
+                    size: 60,
+                    color: Colors.grey[400],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    isCloud ? '云端收藏夹为空' : '暂无本地离线收藏',
+                    style: TextStyle(color: Colors.grey[500], fontSize: 16),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else
+          Expanded(
+            child: Builder(
+              builder: (ctx) {
+                final width = MediaQuery.of(ctx).size.width;
+                final cols = (width / 170).floor().clamp(2, 7);
+                return MasonryGridView.count(
+                  padding: EdgeInsets.fromLTRB(10, 4, 10, widget.bottomPadding),
+                  crossAxisCount: cols,
+                  mainAxisSpacing: 8,
+                  crossAxisSpacing: 8,
+                  itemCount: items.length,
+                  itemBuilder: (context, index) {
+                    final item = items[index];
+                    final String imageUrl = item['sample_url'] as String? ??
+                        item['preview_url'] as String? ??
+                        '';
+                    final num imgWidth =
+                        item['width'] as num? ?? item['sample_width'] as num? ?? 1;
+                    final num imgHeight =
+                        item['height'] as num? ?? item['sample_height'] as num? ?? 1;
+                    final double aspectRatio = (imgWidth <= 0 || imgHeight <= 0)
+                        ? 1.0
+                        : (imgWidth / imgHeight).clamp(0.42, 2.4);
+
+                    return Card(
+                      clipBehavior: Clip.antiAlias,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12.0),
+                      ),
+                      child: InkWell(
+                        onTap: () {
+                          final hasChildren = item['has_children'] as bool? ?? false;
+                          if (hasChildren) {
+                            Navigator.push(
+                              context,
+                              SakuraPageRoute(
+                                builder: (_) => GroupPostsScreen(parentPost: item),
+                              ),
+                            );
+                            return;
+                          }
+                          Navigator.push(
+                            context,
+                            SakuraPageRoute(
+                              builder: (context) =>
+                                  AndroidFullImageScreen(postData: item),
+                            ),
+                          );
+                        },
+                        child: AspectRatio(
+                          aspectRatio: aspectRatio,
+                          child: SakuraAnimatedImage(
+                            imageUrl: imageUrl,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
           ),
-        );
-      },
+      ],
     );
   }
 }

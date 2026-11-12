@@ -7,18 +7,63 @@ import 'package:vce1_sakuraview/models/site_config.dart';
 import 'package:logging/logging.dart';
 
 class ZerochanApiClient extends ImageApiClient {
-  ZerochanApiClient({super.apiKey, super.username})
-      : super(site: ImageSite.zerochan);
+  ZerochanApiClient({
+    super.apiKey,
+    super.username,
+    super.cookies,
+    super.userAgent,
+  }) : super(site: ImageSite.zerochan);
 
   static final _logger = Logger('ZerochanApiClient');
 
   @override
-  Map<String, String> get headers => {
-        'Accept': 'application/json',
-        'User-Agent':
-            'SakuraView - ${username.isNotEmpty ? username : "vce1"}',
-        if (apiKey.isNotEmpty) 'Authorization': 'Bearer $apiKey',
-      };
+  Map<String, String> get headers {
+    final map = <String, String>{
+      'Accept': 'application/json',
+      'User-Agent': userAgent.trim().isNotEmpty
+          ? userAgent.trim()
+          : 'SakuraView - ${username.isNotEmpty ? username : "vce1"}',
+      if (apiKey.isNotEmpty) 'Authorization': 'Bearer $apiKey',
+    };
+    if (cookies.trim().isNotEmpty) {
+      map['Cookie'] = cookies.trim();
+    }
+    return map;
+  }
+
+  @override
+  Future<List<PostHiveModel>> fetchCloudFavorites({
+    int page = 1,
+    int limit = 40,
+    bool safeMode = false,
+  }) async {
+    final targetUser = username.trim();
+    if (targetUser.isEmpty && cookies.trim().isEmpty) {
+      throw ApiException('请先在站点设置中配置 Zerochan 用户名或通过 WebView 登录以同步云端收藏');
+    }
+    final base = Uri.parse(site.apiBaseUrl);
+    final qParams = <String, String>{
+      'json': '',
+      'p': '$page',
+      'l': '$limit',
+      if (targetUser.isNotEmpty) 'fav': targetUser,
+    };
+    final uri = base.replace(path: '/', queryParameters: qParams);
+    _logger.info('Zerochan cloud favorites: $uri');
+    final response = await httpGet(uri);
+    final data = extractZerochanJson(response.body);
+    if (data == null) return [];
+    final List<dynamic> items = data['items'] as List<dynamic>? ?? [];
+    final posts = <PostHiveModel>[];
+    for (final item in items) {
+      if (item is! Map<String, dynamic>) continue;
+      try {
+        final post = parsePost(item);
+        if (post.id > 0) posts.add(post);
+      } catch (_) {}
+    }
+    return posts;
+  }
 
   String _encodeTags(String tags) {
     if (tags.contains(',')) {

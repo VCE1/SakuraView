@@ -7,8 +7,12 @@ import 'package:vce1_sakuraview/models/site_config.dart';
 import 'package:logging/logging.dart';
 
 class DanbooruApiClient extends ImageApiClient {
-  DanbooruApiClient({super.apiKey, super.username})
-      : super(site: ImageSite.danbooru);
+  DanbooruApiClient({
+    super.apiKey,
+    super.username,
+    super.cookies,
+    super.userAgent,
+  }) : super(site: ImageSite.danbooru);
 
   static final _logger = Logger('DanbooruApiClient');
 
@@ -17,13 +21,18 @@ class DanbooruApiClient extends ImageApiClient {
     final map = <String, String>{
       'Accept': 'application/json',
       'Content-Type': 'application/json',
-      'User-Agent': username.isNotEmpty
-          ? 'vce1.sakuraview/1.1 ($username)'
-          : 'vce1.sakuraview/1.1 (vce1)',
+      'User-Agent': userAgent.trim().isNotEmpty
+          ? userAgent.trim()
+          : (username.isNotEmpty
+              ? 'vce1.sakuraview/1.2 ($username)'
+              : 'vce1.sakuraview/1.2 (vce1)'),
     };
     if (username.isNotEmpty && apiKey.isNotEmpty) {
       final token = base64Encode(utf8.encode('$username:$apiKey'));
       map['Authorization'] = 'Basic $token';
+    }
+    if (cookies.trim().isNotEmpty) {
+      map['Cookie'] = cookies.trim();
     }
     return map;
   }
@@ -110,6 +119,23 @@ class DanbooruApiClient extends ImageApiClient {
     } catch (e) {
       throw ApiException('Failed to fetch posts', originalError: e);
     }
+  }
+
+  @override
+  Future<List<PostHiveModel>> fetchCloudFavorites({
+    int page = 1,
+    int limit = 40,
+    bool safeMode = false,
+  }) async {
+    if (username.trim().isEmpty) {
+      throw ApiException('请先在设置或站点管理中配置 Danbooru 用户名以同步云端收藏夹');
+    }
+    return searchPosts(
+      tags: 'ordfav:${username.trim()}',
+      page: page,
+      limit: limit,
+      safeMode: safeMode,
+    );
   }
 
   @override
