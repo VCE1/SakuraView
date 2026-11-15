@@ -18,6 +18,7 @@ import 'package:vce1_sakuraview/pages/search_page.dart';
 import 'package:vce1_sakuraview/widgets/common/quick_search_drawer.dart';
 import 'package:vce1_sakuraview/widgets/common/rating_filter_pill.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_drawer_swipe_region.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_post_card.dart';
 import 'package:vce1_sakuraview/widgets/common/telegram_floating_nav_bar.dart';
@@ -55,8 +56,6 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
   String? _lastSourceId;
   bool _isDrawerOpen = false;
   bool _isEndDrawerOpen = false;
-  double? _swipeStartX;
-  double _swipeDeltaX = 0.0;
 
   @override
   void initState() {
@@ -390,6 +389,8 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
               extendBody: true,
               onDrawerChanged: (opened) => _isDrawerOpen = opened,
               onEndDrawerChanged: (opened) => _isEndDrawerOpen = opened,
+              drawerEnableOpenDragGesture: true,
+              drawerEdgeDragWidth: 64.0,
               endDrawer: const QuickSearchDrawer(),
               endDrawerEnableOpenDragGesture: true,
               appBar: PreferredSize(
@@ -567,45 +568,20 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
                       ],
                     ),
                   ),
-                  child: IndexedStack(
-                    index: showFavoritesView
-                        ? 2
-                        : (_currentTabIndex == 1 ? 1 : 0),
-                    children: [
-                      HeroMode(
-                        enabled: !showFavoritesView && _currentTabIndex == 0,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onHorizontalDragStart: (details) {
-                            _swipeStartX = details.globalPosition.dx;
-                            _swipeDeltaX = 0.0;
-                          },
-                          onHorizontalDragUpdate: (details) {
-                            if (_swipeStartX == null) return;
-                            _swipeDeltaX += details.primaryDelta ?? 0.0;
-                          },
-                          onHorizontalDragCancel: () {
-                            _swipeStartX = null;
-                            _swipeDeltaX = 0.0;
-                          },
-                          onHorizontalDragEnd: (details) {
-                            final startX = _swipeStartX;
-                            final deltaX = _swipeDeltaX;
-                            _swipeStartX = null;
-                            _swipeDeltaX = 0.0;
-                            if (startX == null) return;
-                            final screenWidth =
-                                MediaQuery.of(context).size.width;
-                            final vx = details.velocity.pixelsPerSecond.dx;
-                            // 仅当手势起点位于右半屏且向左滑动超过阈值时呼出快速搜索栏
-                            if (startX >= screenWidth * 0.5 &&
-                                (deltaX <= -42 || vx <= -320)) {
-                              _scaffoldKey.currentState?.openEndDrawer();
-                            }
-                          },
+                  child: SakuraDrawerSwipeDetector(
+                    onSwipeRightFromLeft: () =>
+                        _scaffoldKey.currentState?.openDrawer(),
+                    onSwipeLeftFromRight: () =>
+                        _scaffoldKey.currentState?.openEndDrawer(),
+                    child: IndexedStack(
+                      index: showFavoritesView
+                          ? 2
+                          : (_currentTabIndex == 1 ? 1 : 0),
+                      children: [
+                        HeroMode(
+                          enabled: !showFavoritesView && _currentTabIndex == 0,
                           child: homeContent,
                         ),
-                      ),
                       HeroMode(
                         enabled: !showFavoritesView && _currentTabIndex == 1,
                         child: Padding(
@@ -624,6 +600,7 @@ class AndroidImageGridPageState extends State<AndroidImageGridPage> {
                         ),
                       ),
                     ],
+                    ),
                   ),
                 ),
               ),

@@ -139,12 +139,97 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
 
     if (widget.posts.isNotEmpty) {
       final currentPost = widget.posts[_currentIndex];
+      _syncLocalDownloadTier(_currentIndex, allowNotify: false);
       HistoryService.instance.addHistory(currentPost);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           _loadPageWithSettings(_currentIndex);
         }
       });
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncLocalDownloadTier(_currentIndex, allowNotify: false);
+  }
+
+  BaseDownloadNotifier? _maybeDownloadNotifier({bool listen = false}) {
+    try {
+      return Provider.of<BaseDownloadNotifier>(context, listen: listen);
+    } on ProviderNotFoundException {
+      return null;
+    }
+  }
+
+  DownloadedItem? _findDownloadedItem(int index) {
+    if (index < 0 || index >= widget.posts.length) return null;
+    final downloadNotifier = _maybeDownloadNotifier(listen: false);
+    if (downloadNotifier == null) return null;
+    return DownloadMetadataHelper.findMatchingDownloadedItem(
+      downloadNotifier.downloadedItems,
+      widget.posts[index],
+    );
+  }
+
+  String? _effectiveLocalFilePath(int index) {
+    if (index < 0 || index >= widget.posts.length) return null;
+    final post = widget.posts[index];
+    if (post['is_local_file'] == true || widget.isLocal) {
+      final raw = (post['local_file_path'] ??
+              post['localPath'] ??
+              post['local_path'] ??
+              '')
+          .toString()
+          .trim();
+      if (raw.isNotEmpty) return raw;
+    }
+    final matched = _findDownloadedItem(index);
+    if (matched != null &&
+        matched.filePath.isNotEmpty &&
+        File(matched.filePath).existsSync()) {
+      return matched.filePath;
+    }
+    return null;
+  }
+
+  bool _hasLocalDownloadedOriginal(int index) {
+    if (index < 0 || index >= widget.posts.length) return false;
+    final post = widget.posts[index];
+    final matched = _findDownloadedItem(index);
+    final bool matchedExists = matched != null &&
+        matched.filePath.isNotEmpty &&
+        File(matched.filePath).existsSync();
+    final bool isExplicitLocal =
+        post['is_local_file'] == true || widget.isLocal;
+    if (!isExplicitLocal && !matchedExists) return false;
+    return DownloadMetadataHelper.isPostDownloadedOriginal(
+      post,
+      matchedItem: matchedExists ? matched : null,
+    );
+  }
+
+  void _syncLocalDownloadTier(int index, {bool allowNotify = true}) {
+    if (index < 0 || index >= widget.posts.length) return;
+    final post = widget.posts[index];
+    final bool isExplicitLocal =
+        post['is_local_file'] == true || widget.isLocal;
+    final bool isOrigLocal = _hasLocalDownloadedOriginal(index);
+    _ResolutionTier? targetTier;
+    if (isOrigLocal) {
+      targetTier = _ResolutionTier.original;
+    } else if (isExplicitLocal && _activeTiers[index] == null) {
+      targetTier = _ResolutionTier.sample;
+    }
+    if (targetTier != null && _activeTiers[index] != targetTier) {
+      if (allowNotify && mounted) {
+        setState(() {
+          _activeTiers[index] = targetTier!;
+        });
+      } else {
+        _activeTiers[index] = targetTier;
+      }
     }
   }
 
@@ -179,7 +264,10 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
         _loadMediumImage(index - 1);
       }
     }
-    if (viewOriginalByDefault) {
+    final currentPost = widget.posts[index];
+    final isExplicitLocal =
+        currentPost['is_local_file'] == true || widget.isLocal;
+    if (viewOriginalByDefault && !isExplicitLocal) {
       _requestOriginalImage(index);
     }
   }
@@ -234,15 +322,28 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
   }
 
   String _getOrigUrl(Map<String, dynamic> post) {
-    if (post['is_local_file'] == true || widget.isLocal) {
-      return (post['local_file_path'] ?? post['localPath'] ?? '') as String;
+    final remoteOrig = (post['file_url'] ??
+            post['original_url'] ??
+            post['jpeg_url'] ??
+            '')
+        .toString();
+    final isLocalFlag = post['is_local_file'] == true || widget.isLocal;
+    if (isLocalFlag) {
+      final localPath = (post['local_file_path'] ??
+              post['localPath'] ??
+              post['local_path'] ??
+              '')
+          .toString();
+      final isOrigLocal = DownloadMetadataHelper.isPostDownloadedOriginal(post);
+      if (!isOrigLocal &&
+          (remoteOrig.startsWith('http://') ||
+              remoteOrig.startsWith('https://'))) {
+        return remoteOrig;
+      }
+      if (localPath.isNotEmpty) return localPath;
     }
-    return (post['file_url'] ??
-        post['original_url'] ??
-        post['jpeg_url'] ??
-        post['sample_url'] ??
-        post['preview_url'] ??
-        '') as String;
+    if (remoteOrig.isNotEmpty) return remoteOrig;
+    return (post['sample_url'] ?? post['preview_url'] ?? '') as String;
   }
 
   void _resolveUrl(
@@ -290,7 +391,11 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
 
     if (SourceUrlResolver.isVideoMedia(url: origCheck, fileExt: ext) ||
         SourceUrlResolver.isVideoMedia(url: sampleUrl)) {
-      _activeTiers[index] = _ResolutionTier.original;
+      if (mounted) {
+        setState(() => _activeTiers[index] = _ResolutionTier.original);
+      } else {
+        _activeTiers[index] = _ResolutionTier.original;
+      }
       return;
     }
 
@@ -301,8 +406,21 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
       return;
     }
 
+    if (_hasLocalDownloadedOriginal(index)) {
+      if (mounted) {
+        setState(() => _activeTiers[index] = _ResolutionTier.original);
+      } else {
+        _activeTiers[index] = _ResolutionTier.original;
+      }
+      return;
+    }
+
     if (post['is_local_file'] == true || widget.isLocal) {
-      _activeTiers[index] = _ResolutionTier.original;
+      if (mounted) {
+        setState(() => _activeTiers[index] = _ResolutionTier.sample);
+      } else {
+        _activeTiers[index] = _ResolutionTier.sample;
+      }
       return;
     }
 
@@ -375,7 +493,7 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
       setState(() => _activeTiers[index] = _ResolutionTier.original);
       return;
     }
-    if (post['is_local_file'] == true || widget.isLocal) {
+    if (_hasLocalDownloadedOriginal(index)) {
       setState(() => _activeTiers[index] = _ResolutionTier.original);
       return;
     }
@@ -505,11 +623,6 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
           post['score'] = result!.postScore;
         }
       });
-      _showToast(
-        nextVote == 0
-            ? '已取消评分投票'
-            : (nextVote > 0 ? '已赞同 (+1)' : '已点踩 (-1)'),
-      );
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -535,7 +648,7 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
       adapter: adapter,
     );
     if (!mounted) return;
-    if (res.cloudMessage != null) {
+    if (!res.cloudSynced && res.cloudMessage != null) {
       _showToast(res.cloudMessage!);
     }
   }
@@ -745,10 +858,15 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
 
                   final currentTier =
                       _activeTiers[index] ?? _ResolutionTier.thumbnail;
+                  final localFilePath = _effectiveLocalFilePath(index);
+                  final hasLocalOrig = _hasLocalDownloadedOriginal(index);
+                  final bool useLocalFile = localFilePath != null &&
+                      File(localFilePath).existsSync() &&
+                      (hasLocalOrig || currentTier != _ResolutionTier.original);
 
                   final String effectiveUrl;
-                  if (isLocal) {
-                    effectiveUrl = rawOrig;
+                  if (useLocalFile) {
+                    effectiveUrl = localFilePath;
                   } else {
                     switch (currentTier) {
                       case _ResolutionTier.original:
@@ -764,7 +882,7 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
                   }
 
                   final ImageProvider provider;
-                  if (isLocal && File(effectiveUrl).existsSync()) {
+                  if (useLocalFile) {
                     provider = FileImage(File(effectiveUrl));
                   } else {
                     provider = createSiteImageProvider(
@@ -894,7 +1012,8 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
         ? post['score'] as int
         : int.tryParse(post['score']?.toString() ?? '') ?? 0;
 
-    final isOriginal = _activeTiers[_currentIndex] == _ResolutionTier.original;
+    final isOriginal = _activeTiers[_currentIndex] == _ResolutionTier.original ||
+        _hasLocalDownloadedOriginal(_currentIndex);
     final isLoadingOriginal = _originalLoading[_currentIndex] == true;
 
     final favNotifier = context.watch<FavoritesNotifier>();
@@ -903,9 +1022,13 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
         : (post['file_url']?.toString() ?? '');
     final isFav = favNotifier.isFavorite(favKey);
 
-    final downloadNotifier = context.watch<BaseDownloadNotifier>();
-    final isDownloaded =
-        downloadNotifier.downloadedItems.any((it) => it.id == postIdStr);
+    final downloadNotifier = _maybeDownloadNotifier(listen: true);
+    final isDownloaded = downloadNotifier != null &&
+        DownloadMetadataHelper.findMatchingDownloadedItem(
+              downloadNotifier.downloadedItems,
+              post,
+            ) !=
+            null;
 
     return Container(
       padding: EdgeInsets.fromLTRB(12, topPadding + 6, 12, 10),
@@ -1023,10 +1146,22 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
             const SizedBox(width: 4),
           ],
 
-          // 1. HD 原图加载
+          // 1. HD 原图加载（下载或切换为原图时自动勾选提示）
           Material(
-            color: Colors.black38,
-            shape: const CircleBorder(),
+            color: isOriginal
+                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.28)
+                : Colors.black38,
+            shape: CircleBorder(
+              side: isOriginal
+                  ? BorderSide(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.85),
+                      width: 1.2,
+                    )
+                  : BorderSide.none,
+            ),
             clipBehavior: Clip.antiAlias,
             child: IconButton(
               icon: isLoadingOriginal
@@ -1038,18 +1173,44 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
                         color: Colors.white,
                       ),
                     )
-                  : Icon(
-                      isOriginal ? Icons.hd_rounded : Icons.hd_outlined,
-                      color: isOriginal
-                          ? Theme.of(context).colorScheme.primary
-                          : Colors.white70,
-                      size: 21,
+                  : Stack(
+                      clipBehavior: Clip.none,
+                      alignment: Alignment.center,
+                      children: [
+                        Icon(
+                          isOriginal ? Icons.hd_rounded : Icons.hd_outlined,
+                          color: isOriginal
+                              ? Theme.of(context).colorScheme.primary
+                              : Colors.white70,
+                          size: 21,
+                        ),
+                        if (isOriginal)
+                          Positioned(
+                            right: -4,
+                            top: -4,
+                            child: Container(
+                              width: 13,
+                              height: 13,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF10B981),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.black54,
+                                  width: 1,
+                                ),
+                              ),
+                              child: const Icon(
+                                Icons.check_rounded,
+                                size: 9,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
-              tooltip: isOriginal ? '已显示原图' : '加载高清原图',
+              tooltip: isOriginal ? '已勾选原图 (HD)' : '加载高清原图',
               onPressed: () {
-                if (isOriginal) {
-                  _showToast('当前已是高清原图');
-                } else if (!isLoadingOriginal) {
+                if (!isOriginal && !isLoadingOriginal) {
                   _requestOriginalImage(_currentIndex);
                 }
               },
@@ -1089,28 +1250,14 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
                 color: isDownloaded ? const Color(0xFF10B981) : Colors.white70,
                 size: 21,
               ),
-              tooltip: isDownloaded ? '已在相册中' : '下载',
+              tooltip: isDownloaded ? '已下载到本地' : '下载',
               onPressed: () async {
-                if (isDownloaded) {
-                  _showToast('该图片已在下载目录中');
-                } else {
-                  final res = await context
-                      .read<BaseDownloadNotifier>()
-                      .enqueueDownload(post);
-                  switch (res) {
-                    case EnqueueResult.success:
-                      _showToast('已加入下载队列');
-                      break;
-                    case EnqueueResult.alreadyDownloaded:
-                      _showToast('该图片已存在');
-                      break;
-                    case EnqueueResult.alreadyInQueue:
-                      _showToast('该图片已在下载队列中');
-                      break;
-                    case EnqueueResult.failed:
-                      _showToast('加入下载队列失败');
-                      break;
-                  }
+                if (isDownloaded) return;
+                final res = await context
+                    .read<BaseDownloadNotifier>()
+                    .enqueueDownload(post);
+                if (res == EnqueueResult.failed && mounted) {
+                  _showToast('加入下载队列失败');
                 }
               },
             ),

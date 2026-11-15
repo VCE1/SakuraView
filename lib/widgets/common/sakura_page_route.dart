@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_drawer_swipe_region.dart';
 
 /// Entrance transition inspired by pixes's `EntrancePageTransition` & `DrillInPageTransition`.
 class SakuraEntranceTransition extends StatelessWidget {
@@ -43,12 +44,14 @@ class SakuraPageRoute<T> extends PageRoute<T> {
   final WidgetBuilder builder;
   final bool preventRebuild;
   final bool isRoot;
+  final bool enableSwipeBack;
 
   SakuraPageRoute({
     required this.builder,
     super.settings,
     this.preventRebuild = true,
     this.isRoot = false,
+    this.enableSwipeBack = true,
     super.fullscreenDialog,
   });
 
@@ -95,6 +98,23 @@ class SakuraPageRoute<T> extends PageRoute<T> {
     if (isRoot) {
       return SakuraEntranceTransition(
         animation: animation,
+        child: child,
+      );
+    }
+    if (enableSwipeBack) {
+      child = SakuraDrawerSwipeDetector(
+        minLeftStartWidth: Platform.isIOS ? 24.0 : 0.0,
+        maxLeftStartWidth: 88.0,
+        leftZoneFraction: 0.28,
+        onSwipeRightFromLeft: () {
+          final nav = navigator;
+          if (isCurrent &&
+              canPop &&
+              nav != null &&
+              !nav.userGestureInProgress) {
+            nav.maybePop();
+          }
+        },
         child: child,
       );
     }

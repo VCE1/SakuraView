@@ -218,6 +218,10 @@ class PooledDownloadNotifier extends BaseDownloadNotifier {
         final model = PostHiveModel.fromApiMap(postData);
         model.localPath = filePath;
         await postBox.put(postId, model);
+      } else if (existing.downloadedQuality == null &&
+          postData['downloaded_quality'] != null) {
+        existing.downloadedQuality = postData['downloaded_quality']?.toString();
+        await postBox.put(postId, existing);
       }
       await scanForDownloadedImages();
     } catch (_) {}
@@ -1003,6 +1007,12 @@ class PooledDownloadNotifier extends BaseDownloadNotifier {
       final updated = PostHiveModel.fromApiMap(enrichedMap);
       if (existing?.localPath != null && existing!.localPath!.isNotEmpty) {
         updated.localPath = existing.localPath;
+      }
+      if ((updated.downloadedQuality == null ||
+              updated.downloadedQuality!.isEmpty) &&
+          existing?.downloadedQuality != null &&
+          existing!.downloadedQuality!.isNotEmpty) {
+        updated.downloadedQuality = existing.downloadedQuality;
       }
       await postBox.put(postId, updated);
       await scanForDownloadedImages();

@@ -142,11 +142,6 @@ class _PostDetailPageState extends State<PostDetailPage> {
           _postMap['score'] = result!.postScore;
         }
       });
-      _showStatusSnack(
-        nextVote == 0
-            ? '已取消评分投票'
-            : (nextVote > 0 ? '已赞同 (+1)' : '已点踩 (-1)'),
-      );
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -175,10 +170,10 @@ class _PostDetailPageState extends State<PostDetailPage> {
         adapter: adapter,
       );
       if (!mounted) return;
-      if (res.cloudMessage != null) {
+      if (!res.cloudSynced && res.cloudMessage != null) {
         _showStatusSnack(
           res.cloudMessage!,
-          isError: !res.cloudSynced && res.cloudMessage!.contains('失败'),
+          isError: true,
         );
       }
     } finally {
@@ -386,6 +381,13 @@ class _PostDetailPageState extends State<PostDetailPage> {
           merged['local_path'] = _postMap['local_path'];
           merged['localPath'] = _postMap['localPath'];
           merged['local_file_path'] = _postMap['local_file_path'];
+          if (_postMap['downloaded_quality'] != null) {
+            merged['downloaded_quality'] = _postMap['downloaded_quality'];
+          }
+          if (_postMap['is_downloaded_original'] != null) {
+            merged['is_downloaded_original'] =
+                _postMap['is_downloaded_original'];
+          }
         }
         _postMap = merged;
       });
@@ -466,15 +468,9 @@ class _PostDetailPageState extends State<PostDetailPage> {
     final notifier = context.read<BaseDownloadNotifier>();
     final result = await notifier.enqueueDownload(target);
     if (!mounted) return;
-    final msg = switch (result) {
-      EnqueueResult.success => '已加入下载队列',
-      EnqueueResult.alreadyInQueue => '该作品已在下载队列中',
-      EnqueueResult.alreadyDownloaded => '该作品已在本地下载目录中',
-      EnqueueResult.failed => '下载任务创建失败：缺少有效文件地址',
-    };
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
-    );
+    if (result == EnqueueResult.failed) {
+      _showStatusSnack('下载任务创建失败：缺少有效文件地址', isError: true);
+    }
   }
 
   Future<void> _downloadGroupPosts() async {
@@ -756,26 +752,43 @@ class _PostDetailPageState extends State<PostDetailPage> {
 
             return SingleChildScrollView(
               controller: _scrollController,
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 28),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _buildPreviewCard(context, post),
-                  const SizedBox(height: 14),
-                  _buildActionBar(
+                  _buildPreviewCard(
                     context,
                     post,
-                    postUrl,
-                    showVoteStrip: showVoteStrip,
+                    availableWidthOverride: constraints.maxWidth - 16,
                   ),
-                  const SizedBox(height: 18),
-                  _buildTagsSection(context, post),
-                  const SizedBox(height: 18),
-                  _buildMetadataSection(context, post, postUrl, descriptor?.name),
-                  if (_hasGroup(post) || _groupPosts.length > 1) ...[
-                    const SizedBox(height: 18),
-                    _buildRelatedGroupSection(context, post),
-                  ],
+                  const SizedBox(height: 14),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildActionBar(
+                          context,
+                          post,
+                          postUrl,
+                          showVoteStrip: showVoteStrip,
+                        ),
+                        const SizedBox(height: 18),
+                        _buildTagsSection(context, post),
+                        const SizedBox(height: 18),
+                        _buildMetadataSection(
+                          context,
+                          post,
+                          postUrl,
+                          descriptor?.name,
+                        ),
+                        if (_hasGroup(post) || _groupPosts.length > 1) ...[
+                          const SizedBox(height: 18),
+                          _buildRelatedGroupSection(context, post),
+                        ],
+                      ],
+                    ),
+                  ),
                 ],
               ),
             );
@@ -791,16 +804,26 @@ class _PostDetailPageState extends State<PostDetailPage> {
     double? availableWidthOverride,
     double? maxHeightOverride,
   }) {
-    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
     final screenSize = MediaQuery.sizeOf(context);
-    final rawRatio =
-        (post.width > 0 && post.height > 0) ? post.width / post.height : 1.0;
+    final hasKnownDims = post.width > 0 && post.height > 0;
+    final rawRatio = hasKnownDims ? post.width / post.height : 1.0;
 
-    // 针对超长图与超宽图智能限制显示区域，保持 BoxFit.contain 完整未裁切呈现
     final maxPreviewHeight =
-        maxHeightOverride ?? (screenSize.height * 0.68).clamp(240.0, 620.0);
-    final availableWidth = availableWidthOverride ?? (screenSize.width - 32);
-    final idealHeight = (availableWidth / rawRatio).clamp(180.0, maxPreviewHeight);
+        maxHeightOverride ?? (screenSize.height * 0.72).clamp(240.0, 720.0);
+    final availableWidth =
+        (availableWidthOverride ?? (screenSize.width - 16)).clamp(120.0, 2400.0);
+
+    final double displayW;
+    final double displayH;
+    if (availableWidth / rawRatio <= maxPreviewHeight) {
+      displayW = availableWidth;
+      displayH = (availableWidth / rawRatio).clamp(140.0, maxPreviewHeight);
+    } else {
+      displayH = maxPreviewHeight;
+      displayW = (maxPreviewHeight * rawRatio).clamp(120.0, availableWidth);
+    }
 
     final viewOriginal =
         SettingsProvider.maybeOf(context)?.viewOriginalByDefault ?? false;
@@ -813,19 +836,24 @@ class _PostDetailPageState extends State<PostDetailPage> {
           (hasLocalFile && SourceUrlResolver.isVideoMedia(url: localPath))
               ? localPath
               : post.preferredVideoUrl;
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(14),
-        child: SizedBox(
-          width: double.infinity,
-          height: idealHeight,
-          child: SakuraVideoPlayer(
-            videoUrl: playableSource,
-            posterUrl: post.thumbnailUrl,
-            siteId: _effectiveSiteId,
-            autoPlay: true,
-            looping: true,
-            compact: true,
-            onEnterFullscreen: () => _openImageViewer(post),
+      final videoW = hasKnownDims ? displayW : availableWidth;
+      final videoH =
+          hasKnownDims ? displayH : (availableWidth * 9 / 16).clamp(180.0, maxPreviewHeight);
+      return Center(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+            width: videoW,
+            height: videoH,
+            child: SakuraVideoPlayer(
+              videoUrl: playableSource,
+              posterUrl: post.thumbnailUrl,
+              siteId: _effectiveSiteId,
+              autoPlay: true,
+              looping: true,
+              compact: true,
+              onEnterFullscreen: () => _openImageViewer(post),
+            ),
           ),
         ),
       );
@@ -860,18 +888,61 @@ class _PostDetailPageState extends State<PostDetailPage> {
       );
     }
 
-    return Hero(
-      tag: post.heroTag,
-      child: Material(
-        color: cs.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(14),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => _openImageViewer(post),
-          child: SizedBox(
-            width: double.infinity,
-            height: idealHeight,
-            child: Center(child: previewWidget),
+    // 紧贴图片真实纵横比的圆角展示（不留灰边空框），兼顾轻盈投影与点击波纹
+    Widget mediaFrame = Stack(
+      fit: hasKnownDims ? StackFit.expand : StackFit.passthrough,
+      children: [
+        previewWidget,
+        Positioned.fill(
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              onTap: () => _openImageViewer(post),
+            ),
+          ),
+        ),
+      ],
+    );
+
+    if (hasKnownDims) {
+      mediaFrame = SizedBox(
+        width: displayW,
+        height: displayH,
+        child: mediaFrame,
+      );
+    } else {
+      mediaFrame = ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: availableWidth,
+          maxHeight: maxPreviewHeight,
+        ),
+        child: mediaFrame,
+      );
+    }
+
+    return Center(
+      child: Hero(
+        tag: post.heroTag,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: cs.outlineVariant.withValues(alpha: 0.25),
+              width: 0.6,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(
+                  alpha: theme.brightness == Brightness.dark ? 0.28 : 0.08,
+                ),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: mediaFrame,
           ),
         ),
       ),
@@ -1022,6 +1093,28 @@ class _PostDetailPageState extends State<PostDetailPage> {
     final favNotifier = context.watch<FavoritesNotifier>();
     final favKey = post.id > 0 ? '${post.id}' : post.originalUrl;
     final isFav = favNotifier.isFavorite(favKey);
+    final postIdStr = post.id > 0 ? '${post.id}' : '';
+    BaseDownloadNotifier? downloadNotifier;
+    try {
+      downloadNotifier = Provider.of<BaseDownloadNotifier>(context, listen: true);
+    } on ProviderNotFoundException {
+      downloadNotifier = null;
+    }
+    final isDownloaded = post.isLocalFile ||
+        (downloadNotifier != null &&
+            DownloadMetadataHelper.findMatchingDownloadedItem(
+                  downloadNotifier.downloadedItems,
+                  _postMap,
+                ) !=
+                null);
+    final isInQueue = postIdStr.isNotEmpty &&
+        (downloadNotifier?.downloadingTasks.any(
+              (t) =>
+                  (t.postData['id']?.toString() == postIdStr ||
+                      t.taskId == postIdStr) &&
+                  t.status.isActive,
+            ) ??
+            false);
 
     Widget buildBtn({
       required IconData icon,
@@ -1065,8 +1158,13 @@ class _PostDetailPageState extends State<PostDetailPage> {
             ),
             const SizedBox(width: 10),
             buildBtn(
-              icon: Icons.download_outlined,
-              label: '下载',
+              icon: isDownloaded
+                  ? Icons.download_done_rounded
+                  : (isInQueue
+                      ? Icons.downloading_rounded
+                      : Icons.download_outlined),
+              label: isDownloaded ? '已下载' : (isInQueue ? '队列中' : '下载'),
+              active: isDownloaded || isInQueue,
               onPressed: _downloadCurrentPost,
             ),
             const SizedBox(width: 10),

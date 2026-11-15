@@ -9,11 +9,11 @@ import 'package:vce1_sakuraview/core/sources/adapters/danbooru_source_adapter.da
 import 'package:vce1_sakuraview/core/sources/builtin_sources.dart';
 import 'package:vce1_sakuraview/core/sources/source_models.dart';
 import 'package:vce1_sakuraview/exceptions/api_exception.dart';
+import 'package:vce1_sakuraview/pages/about_page.dart';
 import 'package:vce1_sakuraview/pages/post_detail_page.dart';
 import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
 import 'package:vce1_sakuraview/providers/favorites_notifier.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
-import 'package:vce1_sakuraview/widgets/common/sakura_logo_icon.dart';
 
 class _TestDownloadNotifier extends BaseDownloadNotifier {
   @override
@@ -324,17 +324,17 @@ void main() {
       expect(remoteFavs, isEmpty);
     });
 
-    testWidgets('SakuraLogoIcon paints cleanly and PostDetailPage shows Danbooru vote strip only for Danbooru', (tester) async {
+    testWidgets(
+        'AboutPage uses Material icon without SakuraLogoIcon and PostDetailPage shows Danbooru vote strip only for Danbooru',
+        (tester) async {
       await tester.pumpWidget(
         const MaterialApp(
-          home: Scaffold(
-            body: Center(
-              child: SakuraLogoIcon(size: 56),
-            ),
-          ),
+          home: AboutPage(),
         ),
       );
-      expect(find.byType(SakuraLogoIcon), findsOneWidget);
+      await tester.pump();
+      expect(find.byIcon(Icons.collections_rounded), findsOneWidget);
+      expect(find.byType(Image), findsNothing);
       expect(find.byType(CustomPaint), findsWidgets);
 
       final siteProvider = SiteConfigProvider();

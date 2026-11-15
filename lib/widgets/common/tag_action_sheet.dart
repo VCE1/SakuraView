@@ -77,21 +77,8 @@ Future<void> showTagActionSheet(
                     isFollowed ? '已保存在搜索页「特别关注」分组中' : '收藏常用画师、角色或偏好题材',
                   ),
                   onTap: () async {
-                    final nowFollowed = await followed.toggleTag(cleanTag);
+                    await followed.toggleTag(cleanTag);
                     if (sheetCtx.mounted) Navigator.pop(sheetCtx);
-                    messenger
-                      ..hideCurrentSnackBar()
-                      ..showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            nowFollowed
-                                ? '已将「$displayTag」加入特别关注'
-                                : '已取消对「$displayTag」的特别关注',
-                          ),
-                          behavior: SnackBarBehavior.floating,
-                          duration: const Duration(seconds: 2),
-                        ),
-                      );
                   },
                 ),
                 ListTile(
@@ -110,19 +97,6 @@ Future<void> showTagActionSheet(
                       await blacklist.addTag(cleanTag);
                     }
                     if (sheetCtx.mounted) Navigator.pop(sheetCtx);
-                    messenger
-                      ..hideCurrentSnackBar()
-                      ..showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            isBlocked
-                                ? '已将「$displayTag」移出黑名单'
-                                : '已将「$displayTag」加入黑名单',
-                          ),
-                          behavior: SnackBarBehavior.floating,
-                          duration: const Duration(seconds: 2),
-                        ),
-                      );
                   },
                 ),
                 ListTile(

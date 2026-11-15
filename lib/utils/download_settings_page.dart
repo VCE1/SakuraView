@@ -59,16 +59,6 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
     await _settingsService.setDownloadQuality(quality);
     if (!mounted) return;
     setState(() => _selectedQuality = quality);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          quality == DownloadQuality.original
-              ? '默认下载画质已设为：原图'
-              : '默认下载画质已设为：中等尺寸',
-        ),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
   }
 
   Future<void> _selectPreset(DownloadStoragePreset preset) async {
@@ -91,15 +81,6 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
     try {
       await context.read<BaseDownloadNotifier>().scanForDownloadedImages();
     } catch (_) {}
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('已切换下载位置：${preset.title}'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
   }
 
   Future<void> _pickCustomFolder() async {

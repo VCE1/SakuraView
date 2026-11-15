@@ -12,6 +12,8 @@ import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/services/blacklist_service.dart';
 import 'package:vce1_sakuraview/utils/settings_service.dart';
 import 'package:vce1_sakuraview/widgets/common/rating_filter_pill.dart';
+import 'package:vce1_sakuraview/widgets/common/quick_search_drawer.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_drawer_swipe_region.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_post_card.dart';
 
@@ -413,31 +415,30 @@ class SearchResultsPage extends StatelessWidget {
               color: isSavedQuick ? cs.primary : null,
             ),
             onPressed: () async {
-              final added = await recentNotifier.toggleQuickSearch(
+              await recentNotifier.toggleQuickSearch(
                 query: query,
                 uploader: uploader,
                 artist: artist,
                 sort: sort,
                 label: title,
               );
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(added ? '已保存到快速搜索预设' : '已从快速搜索移除'),
-                  duration: const Duration(milliseconds: 1400),
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
             },
           ),
           const SizedBox(width: 4),
         ],
       ),
-      body: SearchResultsView(
-        query: query,
-        uploader: uploader,
-        artist: artist,
-        sort: sort,
+      endDrawer: const QuickSearchDrawer(),
+      endDrawerEnableOpenDragGesture: true,
+      body: Builder(
+        builder: (innerCtx) => SakuraDrawerSwipeDetector(
+          onSwipeLeftFromRight: () => Scaffold.of(innerCtx).openEndDrawer(),
+          child: SearchResultsView(
+            query: query,
+            uploader: uploader,
+            artist: artist,
+            sort: sort,
+          ),
+        ),
       ),
     );
   }

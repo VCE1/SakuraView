@@ -95,8 +95,21 @@ class PostHiveModel extends HiveObject {
   @HiveField(29)
   int? pixivId;
 
+  /// 记录实际下载保存时采用的画质档位：`'original'`（原图）或 `'sample'`（压缩大图）。
+  @HiveField(30)
+  String? downloadedQuality;
+
   /// 运行期瞬态字段：记录当前帖子在画廊 Pool 中的页码序号，用于封面折叠排序。
   int? poolIndex;
+
+  static String? _parseDownloadedQuality(Map<String, dynamic> map) {
+    final raw = map['downloaded_quality']?.toString().trim().toLowerCase();
+    if (raw == 'original' || raw == 'sample') return raw;
+    final flag = map['is_downloaded_original'];
+    if (flag == true) return 'original';
+    if (flag == false) return 'sample';
+    return null;
+  }
 
   static int? _parseInt(dynamic v) {
     if (v is int) return v;
@@ -204,7 +217,8 @@ class PostHiveModel extends HiveObject {
       ..previewHeight = _parseInt(map['preview_height'] ?? map['actual_preview_height'])
       ..poolId = _parseInt(map['pool_id'])
       ..poolName = (map['pool_name'] as String?)?.trim()
-      ..pixivId = _parseInt(map['pixiv_id']);
+      ..pixivId = _parseInt(map['pixiv_id'])
+      ..downloadedQuality = _parseDownloadedQuality(map);
   }
 
   Map<String, dynamic> toApiMap({String? siteName}) {
@@ -259,6 +273,10 @@ class PostHiveModel extends HiveObject {
       'local_path': localPath,
       'localPath': localPath,
       if (localPath != null) 'local_file_path': localPath,
+      if (downloadedQuality != null && downloadedQuality!.isNotEmpty) ...{
+        'downloaded_quality': downloadedQuality,
+        'is_downloaded_original': downloadedQuality == 'original',
+      },
     };
   }
 }

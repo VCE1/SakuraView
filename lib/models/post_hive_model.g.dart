@@ -46,13 +46,14 @@ class PostHiveModelAdapter extends TypeAdapter<PostHiveModel> {
       ..previewHeight = fields[26] as int?
       ..poolId = fields[27] as int?
       ..poolName = fields[28] as String?
-      ..pixivId = fields[29] as int?;
+      ..pixivId = fields[29] as int?
+      ..downloadedQuality = fields[30] as String?;
   }
 
   @override
   void write(BinaryWriter writer, PostHiveModel obj) {
     writer
-      ..writeByte(30)
+      ..writeByte(31)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -112,7 +113,9 @@ class PostHiveModelAdapter extends TypeAdapter<PostHiveModel> {
       ..writeByte(28)
       ..write(obj.poolName)
       ..writeByte(29)
-      ..write(obj.pixivId);
+      ..write(obj.pixivId)
+      ..writeByte(30)
+      ..write(obj.downloadedQuality);
   }
 
   @override

@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/config/app_build_info.dart';
-import '../widgets/common/sakura_logo_icon.dart';
 
 /// 开源依赖插件元数据，名称、项目地址与官方简介均来自各依赖包的 pubspec.yaml。
 class OpenSourcePackageInfo {
@@ -218,7 +217,19 @@ class AboutPage extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    const SakuraLogoIcon(size: 56),
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Icon(
+                        Icons.collections_rounded,
+                        size: 28,
+                        color: colorScheme.onPrimaryContainer,
+                      ),
+                    ),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Column(

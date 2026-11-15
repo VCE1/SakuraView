@@ -1048,6 +1048,7 @@ class _DownloadedImagesDisplayState extends State<DownloadedImagesDisplay> {
     Navigator.push(
       context,
       SakuraPageRoute(
+        enableSwipeBack: false,
         builder: (_) => SakuraPhotoGalleryViewer(
           posts: posts,
           initialIndex: initialIndex,

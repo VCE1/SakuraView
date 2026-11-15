@@ -19,6 +19,7 @@ import 'package:vce1_sakuraview/models/post_hive_model.dart';
 import 'package:vce1_sakuraview/pages/android_page.dart';
 import 'package:vce1_sakuraview/pages/windows_page.dart';
 import 'package:vce1_sakuraview/widgets/common/download_images_display_widget.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -123,8 +124,14 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             home: Platform.isWindows
                 ? const WindowImageGridPage()
                 : const AndroidImageGridPage(),
-            routes: {
-              '/downloads': (_) => const DownloadedImagesDisplay(),
+            onGenerateRoute: (settings) {
+              if (settings.name == '/downloads') {
+                return SakuraPageRoute(
+                  settings: settings,
+                  builder: (_) => const DownloadedImagesDisplay(),
+                );
+              }
+              return null;
             },
           );
         },

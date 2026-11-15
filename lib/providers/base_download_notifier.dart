@@ -152,14 +152,17 @@ class DownloadMetadataHelper {
             .trim();
 
     String chosenUrl;
+    final bool downloadedAsOriginal;
     if (quality == DownloadQuality.sample) {
       chosenUrl = sampleUrl.isNotEmpty
           ? sampleUrl
           : (originalUrl.isNotEmpty ? originalUrl : previewUrl);
+      downloadedAsOriginal = sampleUrl.isEmpty && originalUrl.isNotEmpty;
     } else {
       chosenUrl = originalUrl.isNotEmpty
           ? originalUrl
           : (sampleUrl.isNotEmpty ? sampleUrl : previewUrl);
+      downloadedAsOriginal = originalUrl.isNotEmpty || sampleUrl.isEmpty;
     }
     chosenUrl = SourceUrlResolver.ensureHttpsUrl(chosenUrl);
 
@@ -173,6 +176,9 @@ class DownloadMetadataHelper {
     if (fileExt.isEmpty) fileExt = 'jpg';
 
     postData['file_ext'] = fileExt;
+    postData['downloaded_quality'] =
+        downloadedAsOriginal ? 'original' : 'sample';
+    postData['is_downloaded_original'] = downloadedAsOriginal;
     final fileName = '${postId ?? 'unknown'}.$fileExt';
     return ResolvedDownloadTarget(
       url: chosenUrl,
@@ -180,6 +186,125 @@ class DownloadMetadataHelper {
       fileName: fileName,
       postData: postData,
     );
+  }
+
+  static int? _parseIntDynamic(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value.trim());
+    return null;
+  }
+
+  /// 判断已下载的本地文件是否属于原图（HD）。
+  static bool evaluateDownloadedOriginal({
+    String? downloadedQuality,
+    String? filePath,
+    int? actualFileSize,
+    int? apiFileSize,
+    String? fileUrl,
+    String? sampleUrl,
+  }) {
+    final normQuality = downloadedQuality?.trim().toLowerCase();
+    if (normQuality == 'original') return true;
+    if (normQuality == 'sample') return false;
+
+    final cleanOrig = (fileUrl ?? '').trim();
+    final cleanSample = (sampleUrl ?? '').trim();
+
+    if (apiFileSize != null &&
+        apiFileSize > 0 &&
+        actualFileSize != null &&
+        actualFileSize > 0) {
+      if (actualFileSize >= (apiFileSize * 0.90)) {
+        return true;
+      }
+      if (actualFileSize < (apiFileSize * 0.80) &&
+          cleanSample.isNotEmpty &&
+          cleanOrig.isNotEmpty &&
+          cleanSample != cleanOrig) {
+        return false;
+      }
+    }
+
+    if (cleanOrig.isEmpty || cleanSample.isEmpty || cleanOrig == cleanSample) {
+      return true;
+    }
+
+    final localExt = _inferExtensionFromUrl(filePath ?? '');
+    final origExt = _inferExtensionFromUrl(cleanOrig);
+    final sampleExt = _inferExtensionFromUrl(cleanSample);
+    if (localExt.isNotEmpty &&
+        origExt.isNotEmpty &&
+        sampleExt.isNotEmpty &&
+        origExt != sampleExt) {
+      return localExt == origExt;
+    }
+
+    return false;
+  }
+
+  /// 根据帖子字典或已匹配的本地下载项，判定当前本地文件是否为原图。
+  static bool isPostDownloadedOriginal(
+    Map<String, dynamic> post, {
+    DownloadedItem? matchedItem,
+  }) {
+    if (matchedItem != null) {
+      return matchedItem.isDownloadedOriginal;
+    }
+
+    final rawFlag = post['is_downloaded_original'];
+    if (rawFlag is bool) return rawFlag;
+
+    final rawQuality = post['downloaded_quality']?.toString();
+    final localPath =
+        (post['local_file_path'] ?? post['localPath'] ?? post['local_path'])
+            ?.toString();
+    int? actualFileSize = _parseIntDynamic(post['local_file_size']);
+    if ((actualFileSize == null || actualFileSize <= 0) &&
+        localPath != null &&
+        localPath.isNotEmpty) {
+      try {
+        final f = File(localPath);
+        if (f.existsSync()) {
+          actualFileSize = f.lengthSync();
+        }
+      } catch (_) {}
+    }
+    final apiFileSize =
+        _parseIntDynamic(post['api_file_size'] ?? post['file_size']);
+    final origUrl = (post['file_url'] ?? post['original_url'])?.toString();
+    final sampleUrl = post['sample_url']?.toString();
+
+    return evaluateDownloadedOriginal(
+      downloadedQuality: rawQuality,
+      filePath: localPath,
+      actualFileSize: actualFileSize,
+      apiFileSize: apiFileSize,
+      fileUrl: origUrl,
+      sampleUrl: sampleUrl,
+    );
+  }
+
+  /// 在已下载列表中查找与当前帖子（按 ID 与可选站点 ID）匹配的条目。
+  static DownloadedItem? findMatchingDownloadedItem(
+    Iterable<DownloadedItem> items,
+    Map<String, dynamic> post,
+  ) {
+    final postId = post['id']?.toString().trim() ?? '';
+    if (postId.isEmpty) return null;
+    final postSite =
+        (post['site_id'] ?? post['site'])?.toString().trim().toLowerCase() ?? '';
+    DownloadedItem? idOnlyFallback;
+    for (final item in items) {
+      if (item.id != postId) continue;
+      final itemSite = (item.siteName ?? '').trim().toLowerCase();
+      if (itemSite.isNotEmpty && postSite.isNotEmpty) {
+        if (itemSite == postSite) return item;
+        continue;
+      }
+      idOnlyFallback ??= item;
+    }
+    return idOnlyFallback;
   }
 
   static String _inferExtensionFromUrl(String url) {
@@ -237,6 +362,8 @@ class DownloadMetadataHelper {
       score: post.score,
       createdAt: post.createdAt,
       creatorId: post.creatorId,
+      downloadedQuality: post.downloadedQuality,
+      apiFileSize: post.fileSize,
     );
   }
 
@@ -384,6 +511,8 @@ class DownloadedItem {
   final int? score;
   final int? createdAt;
   final int? creatorId;
+  final String? downloadedQuality;
+  final int? apiFileSize;
 
   DownloadedItem({
     required this.id,
@@ -415,7 +544,19 @@ class DownloadedItem {
     this.score,
     this.createdAt,
     this.creatorId,
+    this.downloadedQuality,
+    this.apiFileSize,
   });
+
+  bool get isDownloadedOriginal =>
+      DownloadMetadataHelper.evaluateDownloadedOriginal(
+        downloadedQuality: downloadedQuality,
+        filePath: filePath,
+        actualFileSize: fileSizeBytes,
+        apiFileSize: apiFileSize,
+        fileUrl: fileUrl,
+        sampleUrl: sampleUrl,
+      );
 
   bool get hasGroup =>
       hasChildren ||
@@ -549,6 +690,11 @@ class DownloadedItem {
       'local_file_path': filePath,
       'localPath': filePath,
       'is_local_file': true,
+      if (apiFileSize != null && apiFileSize! > 0) 'api_file_size': apiFileSize,
+      if (fileSizeBytes > 0) 'local_file_size': fileSizeBytes,
+      if (downloadedQuality != null && downloadedQuality!.isNotEmpty)
+        'downloaded_quality': downloadedQuality,
+      'is_downloaded_original': isDownloadedOriginal,
     };
   }
 }

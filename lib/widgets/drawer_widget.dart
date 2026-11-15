@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:vce1_sakuraview/core/utils/post_normalization.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
-import 'package:vce1_sakuraview/widgets/common/sakura_logo_icon.dart';
 
 /// Clean, anti-redundant navigation drawer.
 /// Strict adherence to Less is More:
@@ -137,7 +136,19 @@ class AppDrawer extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        const SakuraLogoIcon(size: 30),
+                        Container(
+                          width: 30,
+                          height: 30,
+                          decoration: BoxDecoration(
+                            color: cs.primaryContainer,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            Icons.collections_rounded,
+                            size: 17,
+                            color: cs.onPrimaryContainer,
+                          ),
+                        ),
                         const SizedBox(width: 10),
                         Text(
                           'SakuraView',

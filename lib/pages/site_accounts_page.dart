@@ -441,14 +441,6 @@ class _SourceAccountCard extends StatelessWidget {
                         await provider.setSourceEnabled(source.id, true);
                       }
                       await provider.setSourceById(source.id);
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('已切换当前图源为 ${source.name}'),
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
-                      }
                     },
                   ),
                 if (isConfigured)

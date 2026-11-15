@@ -97,7 +97,7 @@ class FavoritesNotifier extends ChangeNotifier {
       return (
         isFavorite: nowFav,
         cloudSynced: false,
-        cloudMessage: '已保存到本地收藏（配置 Danbooru 用户名 + API Key 或网页登录后可同步云端）',
+        cloudMessage: null,
       );
     }
 
@@ -124,11 +124,7 @@ class FavoritesNotifier extends ChangeNotifier {
       return (
         isFavorite: nowFav,
         cloudSynced: ok,
-        cloudMessage: ok
-            ? (nowFav
-                ? '已收藏并同步到 ${adapter.descriptor.name} 云端'
-                : '已取消本地及 ${adapter.descriptor.name} 云端收藏')
-            : null,
+        cloudMessage: null,
       );
     } catch (e) {
       final reason = e.toString().replaceFirst('ApiException: ', '');

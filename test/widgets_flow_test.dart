@@ -165,7 +165,7 @@ void main() {
 
         expect(find.text('POST #9001'), findsOneWidget);
         expect(find.text('收藏'), findsOneWidget);
-        expect(find.text('下载'), findsOneWidget);
+        expect(find.text('已下载'), findsOneWidget);
         expect(find.text('分享'), findsOneWidget);
 
         // Verify strict tag section ordering: 原作 -> 角色 -> 作者 -> 常规标签

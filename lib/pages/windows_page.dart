@@ -19,6 +19,7 @@ import 'package:vce1_sakuraview/widgets/drawer_widget.dart';
 import 'package:vce1_sakuraview/widgets/common/quick_search_drawer.dart';
 import 'package:vce1_sakuraview/widgets/common/rating_filter_pill.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_drawer_swipe_region.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_post_card.dart';
 import 'package:vce1_sakuraview/pages/search_page.dart';
@@ -44,8 +45,6 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
   static final Logger _logger = Logger('WindowImageGridPage');
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final ScrollController _scrollController = ScrollController();
-  double? _swipeStartX;
-  double _swipeDeltaX = 0.0;
   RatingFilterMode? _lastRatingFilter;
   String? _lastSourceId;
 
@@ -323,6 +322,8 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
 
         return Scaffold(
           key: _scaffoldKey,
+          drawerEnableOpenDragGesture: true,
+          drawerEdgeDragWidth: 64.0,
           endDrawer: const QuickSearchDrawer(),
           endDrawerEnableOpenDragGesture: true,
           appBar: AppBar(
@@ -479,55 +480,33 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
               );
             },
           ),
-          body: IndexedStack(
-            index: showFavoritesView ? 2 : (showSearchView ? 1 : 0),
-            children: [
-              HeroMode(
-                enabled: !showFavoritesView && !showSearchView,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onHorizontalDragStart: (details) {
-                    _swipeStartX = details.globalPosition.dx;
-                    _swipeDeltaX = 0.0;
-                  },
-                  onHorizontalDragUpdate: (details) {
-                    if (_swipeStartX == null) return;
-                    _swipeDeltaX += details.primaryDelta ?? 0.0;
-                  },
-                  onHorizontalDragCancel: () {
-                    _swipeStartX = null;
-                    _swipeDeltaX = 0.0;
-                  },
-                  onHorizontalDragEnd: (details) {
-                    final startX = _swipeStartX;
-                    final deltaX = _swipeDeltaX;
-                    _swipeStartX = null;
-                    _swipeDeltaX = 0.0;
-                    if (startX == null) return;
-                    final screenWidth = MediaQuery.of(context).size.width;
-                    final vx = details.velocity.pixelsPerSecond.dx;
-                    if (startX >= screenWidth * 0.5 &&
-                        (deltaX <= -42 || vx <= -320)) {
-                      _scaffoldKey.currentState?.openEndDrawer();
-                    }
-                  },
+          body: SakuraDrawerSwipeDetector(
+            onSwipeRightFromLeft: () =>
+                _scaffoldKey.currentState?.openDrawer(),
+            onSwipeLeftFromRight: () =>
+                _scaffoldKey.currentState?.openEndDrawer(),
+            child: IndexedStack(
+              index: showFavoritesView ? 2 : (showSearchView ? 1 : 0),
+              children: [
+                HeroMode(
+                  enabled: !showFavoritesView && !showSearchView,
                   child: homeContent,
                 ),
-              ),
-              HeroMode(
-                enabled: !showFavoritesView && showSearchView,
-                child: const SearchPage(),
-              ),
-              HeroMode(
-                enabled: showFavoritesView,
-                child: Consumer<FavoritesNotifier>(
-                  builder: (context, favoritesNotifier, _) =>
-                      FavoriteDisplayWidget(
-                    favoriteItems: favoritesNotifier.favoriteItems,
+                HeroMode(
+                  enabled: !showFavoritesView && showSearchView,
+                  child: const SearchPage(),
+                ),
+                HeroMode(
+                  enabled: showFavoritesView,
+                  child: Consumer<FavoritesNotifier>(
+                    builder: (context, favoritesNotifier, _) =>
+                        FavoriteDisplayWidget(
+                      favoriteItems: favoritesNotifier.favoriteItems,
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
