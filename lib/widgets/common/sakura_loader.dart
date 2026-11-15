@@ -91,30 +91,37 @@ class SakuraGridShimmer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final sw = MediaQuery.of(context).size.width;
-    final itemWidth = (sw - 32 - (columns - 1) * 8) / columns;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final sw = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : MediaQuery.sizeOf(context).width;
+        final itemWidth =
+            ((sw - 16 - (columns - 1) * 8) / columns).clamp(60.0, 600.0);
 
-    return Shimmer.fromColors(
-      baseColor: cs.surfaceContainerHighest,
-      highlightColor: cs.surface,
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: List.generate(rows, (i) {
-            final h = (140 + (i % 3) * 40).toDouble();
-            return ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: Container(
-                width: itemWidth,
-                height: h,
-                color: cs.surface,
-              ),
-            );
-          }),
-        ),
-      ),
+        return Shimmer.fromColors(
+          baseColor: cs.surfaceContainerHighest,
+          highlightColor: cs.surface,
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: List.generate(rows, (i) {
+                final h = (140 + (i % 3) * 40).toDouble();
+                return ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Container(
+                    width: itemWidth,
+                    height: h,
+                    color: cs.surface,
+                  ),
+                );
+              }),
+            ),
+          ),
+        );
+      },
     );
   }
 }

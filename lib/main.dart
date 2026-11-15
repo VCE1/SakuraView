@@ -38,10 +38,11 @@ void main() async {
 
   if (Platform.isWindows) {
     doWhenWindowReady(() {
-      const initialSize = Size(960, 640);
-      appWindow.minSize = const Size(700, 500);
+      const initialSize = Size(1240, 820);
+      appWindow.minSize = const Size(760, 540);
       appWindow.size = initialSize;
       appWindow.alignment = Alignment.center;
+      appWindow.title = 'SakuraView';
       appWindow.show();
     });
   }

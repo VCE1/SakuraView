@@ -60,12 +60,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "vce1" "\0"
-            VALUE "FileDescription", "vce1.sakuraview" "\0"
+            VALUE "FileDescription", "SakuraView" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "vce1.sakuraview" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2024 vce1. All rights reserved." "\0"
-            VALUE "OriginalFilename", "vce1.sakuraview.exe" "\0"
-            VALUE "ProductName", "vce1.sakuraview" "\0"
+            VALUE "InternalName", "sakuraview" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 vce1. MIT License." "\0"
+            VALUE "OriginalFilename", "sakuraview.exe" "\0"
+            VALUE "ProductName", "SakuraView" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

@@ -299,6 +299,19 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
     return scale > 1.05;
   }
 
+  void _adjustZoom(double factor) {
+    if (widget.posts.isEmpty) return;
+    final ctrl = _getController(_currentIndex);
+    final current = ctrl.scale ?? 1.0;
+    final next = (current * factor).clamp(0.4, 8.0);
+    ctrl.scale = next;
+  }
+
+  void _resetZoom() {
+    final ctrl = _photoControllers[_currentIndex];
+    ctrl?.reset();
+  }
+
   String _getThumbnailUrl(Map<String, dynamic> post) {
     if (post['is_local_file'] == true || widget.isLocal) {
       return (post['local_file_path'] ?? post['localPath'] ?? '') as String;
@@ -741,6 +754,24 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
         _handleInfoTap(widget.posts[_currentIndex]);
       }
       return KeyEventResult.handled;
+    } else if (key == LogicalKeyboardKey.keyH) {
+      if (widget.posts.isNotEmpty) {
+        _requestOriginalImage(_currentIndex);
+      }
+      return KeyEventResult.handled;
+    } else if (key == LogicalKeyboardKey.equal ||
+        key == LogicalKeyboardKey.add ||
+        key == LogicalKeyboardKey.numpadAdd) {
+      _adjustZoom(1.25);
+      return KeyEventResult.handled;
+    } else if (key == LogicalKeyboardKey.minus ||
+        key == LogicalKeyboardKey.numpadSubtract) {
+      _adjustZoom(0.8);
+      return KeyEventResult.handled;
+    } else if (key == LogicalKeyboardKey.digit0 ||
+        key == LogicalKeyboardKey.numpad0) {
+      _resetZoom();
+      return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
   }
@@ -775,8 +806,29 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
     final currentScale = (1.0 - (_dragOffsetY / 1200)).clamp(0.78, 1.0);
     final isWide = MediaQuery.of(context).size.width >= 800;
 
-    final galleryView = Stack(
-      children: [
+    final galleryView = Listener(
+      onPointerDown: (event) {
+        if ((event.buttons & kSecondaryMouseButton) != 0) {
+          setState(() {
+            _showUI = !_showUI;
+          });
+        }
+      },
+      onPointerSignal: (event) {
+        if (event is PointerScrollEvent) {
+          if (HardwareKeyboard.instance.isControlPressed) {
+            _adjustZoom(event.scrollDelta.dy < 0 ? 1.15 : 1 / 1.15);
+          } else if (!_isCurrentZoomed()) {
+            if (event.scrollDelta.dy > 0) {
+              _nextPage();
+            } else if (event.scrollDelta.dy < 0) {
+              _previousPage();
+            }
+          }
+        }
+      },
+      child: Stack(
+        children: [
         // Pull-down dismiss drag detector
         GestureDetector(
           onVerticalDragUpdate: (details) {
@@ -947,20 +999,21 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
         ),
 
         // Top action bar (animated overlay，专注看图，移除左右翻页悬浮按钮与占位控件)
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: AnimatedOpacity(
-            opacity: _showUI ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 220),
-            child: IgnorePointer(
-              ignoring: !_showUI,
-              child: _buildTopBar(post),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: AnimatedOpacity(
+              opacity: _showUI ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 220),
+              child: IgnorePointer(
+                ignoring: !_showUI,
+                child: _buildTopBar(post),
+              ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
 
     return Focus(
@@ -968,13 +1021,9 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
       autofocus: true,
       onKeyEvent: (node, event) => _handleKey(event),
       child: Listener(
-        onPointerSignal: (event) {
-          if (event is PointerScrollEvent) {
-            if (event.scrollDelta.dy > 0) {
-              _nextPage();
-            } else if (event.scrollDelta.dy < 0) {
-              _previousPage();
-            }
+        onPointerDown: (event) {
+          if ((event.buttons & kBackMouseButton) != 0) {
+            Navigator.of(context).maybePop();
           }
         },
         child: Scaffold(

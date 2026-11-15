@@ -7,6 +7,7 @@ import 'package:vce1_sakuraview/core/utils/post_normalization.dart';
 import 'package:vce1_sakuraview/pages/post_detail_page.dart';
 import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
 import 'package:vce1_sakuraview/utils/download_settings_page.dart';
+import 'package:vce1_sakuraview/utils/settings_service.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_photo_gallery_viewer.dart';
@@ -78,6 +79,35 @@ class _DownloadedImagesDisplayState extends State<DownloadedImagesDisplay> {
     Navigator.of(context).push(
       SakuraPageRoute(builder: (_) => const DownloadSettingsPage()),
     );
+  }
+
+  Future<void> _openDownloadFolder() async {
+    try {
+      final settings = SettingsService();
+      final rawPath = await settings.getDownloadPath();
+      final targetPath = (rawPath == null || rawPath.isEmpty)
+          ? await settings.resolvePathForPreset(DownloadStoragePreset.publicPictures)
+          : rawPath;
+      final dir = Directory(targetPath);
+      if (!dir.existsSync()) {
+        await dir.create(recursive: true);
+      }
+      if (Platform.isWindows) {
+        await Process.run('explorer', [dir.path]);
+      } else if (Platform.isMacOS) {
+        await Process.run('open', [dir.path]);
+      } else if (Platform.isLinux) {
+        await Process.run('xdg-open', [dir.path]);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('打开下载目录失败: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   String _formatSize(int bytes) {
@@ -258,6 +288,12 @@ class _DownloadedImagesDisplayState extends State<DownloadedImagesDisplay> {
                     icon: const Icon(Icons.tune_rounded),
                     onPressed: _openDownloadSettings,
                   ),
+                  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS)
+                    IconButton(
+                      tooltip: '打开下载文件夹',
+                      icon: const Icon(Icons.folder_open_rounded),
+                      onPressed: _openDownloadFolder,
+                    ),
                   IconButton(
                     tooltip: '刷新',
                     icon: const Icon(Icons.refresh_rounded),

@@ -584,9 +584,16 @@ class _PostDetailPageState extends State<PostDetailPage> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
-    return PopScope(
-      canPop: true,
-      child: Scaffold(
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.of(context).maybePop(),
+      },
+      child: Focus(
+        autofocus: true,
+        child: PopScope(
+          canPop: true,
+          child: Scaffold(
         backgroundColor: cs.surface,
         appBar: AppBar(
           leading: IconButton(
@@ -794,7 +801,9 @@ class _PostDetailPageState extends State<PostDetailPage> {
             );
           },
         ),
+        ),
       ),
+    ),
     );
   }
 

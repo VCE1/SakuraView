@@ -424,6 +424,13 @@ class SearchResultsPage extends StatelessWidget {
               );
             },
           ),
+          Builder(
+            builder: (btnCtx) => IconButton(
+              tooltip: '快速搜索预设',
+              icon: const Icon(Icons.bookmarks_outlined, size: 20),
+              onPressed: () => Scaffold.of(btnCtx).openEndDrawer(),
+            ),
+          ),
           const SizedBox(width: 4),
         ],
       ),

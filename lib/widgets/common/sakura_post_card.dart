@@ -42,7 +42,7 @@ void prefetchPostThumbnails(
 }
 
 /// 首页、搜索页与桌面端复用的统一作品瀑布流卡片。
-class SakuraPostCard extends StatelessWidget {
+class SakuraPostCard extends StatefulWidget {
   final Map<String, dynamic> item;
   final int cacheWidth;
   final VoidCallback onTap;
@@ -59,13 +59,21 @@ class SakuraPostCard extends StatelessWidget {
   });
 
   @override
+  State<SakuraPostCard> createState() => _SakuraPostCardState();
+}
+
+class _SakuraPostCardState extends State<SakuraPostCard> {
+  bool _isHovered = false;
+
+  @override
   Widget build(BuildContext context) {
+    final item = widget.item;
     final cs = Theme.of(context).colorScheme;
     final settings = SettingsProvider.maybeOf(context);
     final showGroupBadge =
-        showGroupBadgeOverride ?? (settings?.showGroupBadge ?? true);
+        widget.showGroupBadgeOverride ?? (settings?.showGroupBadge ?? true);
     final showR18Badge =
-        showR18BadgeOverride ?? (settings?.showR18Badge ?? true);
+        widget.showR18BadgeOverride ?? (settings?.showR18Badge ?? true);
 
     final num imgWidth = item['preview_width'] as num? ??
         item['width'] as num? ??
@@ -101,69 +109,81 @@ class SakuraPostCard extends StatelessWidget {
     final String postId = item['id']?.toString() ?? '';
     final String heroTag = 'post_hero_${site}_$postId';
 
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12.0),
-          color: cs.surfaceContainerHighest.withAlpha(80),
-          border: Border.all(
-            color: cs.outlineVariant.withAlpha(90),
-            width: 0.8,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) {
+        if (!_isHovered) setState(() => _isHovered = true);
+      },
+      onExit: (_) {
+        if (_isHovered) setState(() => _isHovered = false);
+      },
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12.0),
+            color: cs.surfaceContainerHighest.withAlpha(80),
+            border: Border.all(
+              color: _isHovered
+                  ? cs.primary.withAlpha(170)
+                  : cs.outlineVariant.withAlpha(90),
+              width: _isHovered ? 1.3 : 0.8,
+            ),
           ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: AspectRatio(
-          aspectRatio: aspectRatio,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              Hero(
-                tag: heroTag,
-                child: SakuraAnimatedImage(
-                  imageUrl: imageUrl,
-                  siteId: site,
-                  cacheWidth: cacheWidth,
-                  fit: BoxFit.cover,
-                  filterQuality: FilterQuality.medium,
-                  enableRetryTap: false,
-                ),
-              ),
-              if ((showGroupBadge && hasGroup) || isGif)
-                Positioned(
-                  top: 6,
-                  left: 6,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (showGroupBadge && hasGroup)
-                        _SakuraCardBadge(
-                          icon: Icons.photo_library_rounded,
-                          text: '图组',
-                          color: cs.primary.withAlpha(210),
-                        ),
-                      if (showGroupBadge && hasGroup && isGif)
-                        const SizedBox(width: 4),
-                      if (isGif)
-                        _SakuraCardBadge(
-                          text: fileExt.toUpperCase(),
-                          color: cs.primaryContainer.withAlpha(210),
-                          textColor: cs.onPrimaryContainer,
-                        ),
-                    ],
+          clipBehavior: Clip.antiAlias,
+          child: AspectRatio(
+            aspectRatio: aspectRatio,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Hero(
+                  tag: heroTag,
+                  child: SakuraAnimatedImage(
+                    imageUrl: imageUrl,
+                    siteId: site,
+                    cacheWidth: widget.cacheWidth,
+                    fit: BoxFit.cover,
+                    filterQuality: FilterQuality.medium,
+                    enableRetryTap: false,
                   ),
                 ),
-              if (showR18Badge && isExplicit)
-                Positioned(
-                  top: 6,
-                  right: 6,
-                  child: _SakuraCardBadge(
-                    text: 'R18',
-                    color: cs.error.withAlpha(215),
-                    textColor: cs.onError,
+                if ((showGroupBadge && hasGroup) || isGif)
+                  Positioned(
+                    top: 6,
+                    left: 6,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (showGroupBadge && hasGroup)
+                          _SakuraCardBadge(
+                            icon: Icons.photo_library_rounded,
+                            text: '图组',
+                            color: cs.primary.withAlpha(210),
+                          ),
+                        if (showGroupBadge && hasGroup && isGif)
+                          const SizedBox(width: 4),
+                        if (isGif)
+                          _SakuraCardBadge(
+                            text: fileExt.toUpperCase(),
+                            color: cs.primaryContainer.withAlpha(210),
+                            textColor: cs.onPrimaryContainer,
+                          ),
+                      ],
+                    ),
                   ),
-                ),
-            ],
+                if (showR18Badge && isExplicit)
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: _SakuraCardBadge(
+                      text: 'R18',
+                      color: cs.error.withAlpha(215),
+                      textColor: cs.onError,
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
