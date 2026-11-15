@@ -13,6 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: true
 
+env:
+  FLUTTER_VERSION: '3.44.4'
+
 permissions:
   contents: write
 
@@ -36,6 +39,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
 
@@ -101,6 +105,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: 'stable'
           cache: true
 
@@ -108,8 +113,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ios/Pods
-          key: ios-pods-${{ hashFiles('ios/Podfile', 'pubspec.lock') }}
-          restore-keys: ios-pods-
+          key: ios-pods-${{ env.FLUTTER_VERSION }}-${{ hashFiles('ios/Podfile', 'pubspec.lock') }}
+          restore-keys: ios-pods-${{ env.FLUTTER_VERSION }}-
 
       - name: Get app version
         id: get_version
@@ -128,11 +133,15 @@ jobs:
         run: |
           flutter pub get
           flutter precache --ios
+          flutter build ios --config-only --release --no-codesign \
+            --dart-define=APP_VERSION="${{ steps.get_version.outputs.version }}" \
+            --dart-define=APP_BUILD_NUMBER="${{ steps.get_version.outputs.build_number }}" \
+            --dart-define=BUILD_TIME="${{ steps.get_version.outputs.build_time }}"
 
       - name: Install Pods & build unsigned .app
         run: |
           cd ios
-          pod update
+          pod install --repo-update
           cd ..
           flutter build ios --release --no-codesign \
             --dart-define=APP_VERSION="${{ steps.get_version.outputs.version }}" \
@@ -152,7 +161,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish Direct APK & IPA Release
+    name: Publish Versioned APK & IPA Release
     needs: [build_android, build_ios]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -186,3 +195,51 @@ jobs:
           name: SakuraView ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
           files: release-assets/*
+
+  publish_latest:
+    name: Publish Direct APK & IPA (Pre-release)
+    needs: [build_android, build_ios]
+    if: ${{ !cancelled() && (needs.build_android.result == 'success' || needs.build_ios.result == 'success') && !startsWith(github.ref, 'refs/tags/v') && github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Upload direct .apk & .ipa files to latest-build pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mapfile -t ASSETS < <(find release-assets -type f \( -name '*.apk' -o -name '*.ipa' \) | sort)
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "No built .apk or .ipa files found" >&2
+            exit 1
+          fi
+
+          TAG="latest-build"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          NOTES="Automated build for commit \`${SHORT_SHA}\` (\`${{ github.ref_name }}\`). Direct uncompressed .apk / .ipa installers."
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            while IFS= read -r asset; do
+              [ -n "$asset" ] && gh release delete-asset "$TAG" "$asset" -y || true
+            done < <(gh release view "$TAG" --json assets --jq '.assets[].name')
+            gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/${TAG}" -f sha="${GITHUB_SHA}" -F force=true || true
+            gh release edit "$TAG" --target "${GITHUB_SHA}" --title "Latest Build (${SHORT_SHA})" --notes "$NOTES" --prerelease
+          else
+            gh release create "$TAG" --target "${GITHUB_SHA}" --title "Latest Build (${SHORT_SHA})" --notes "$NOTES" --prerelease
+          fi
+
+          gh release upload "$TAG" "${ASSETS[@]}" --clobber
+
+          {
+            echo "### Direct Downloads (Uncompressed Release Assets)"
+            echo ""
+            for f in "${ASSETS[@]}"; do
+              name=$(basename "$f")
+              echo "- [${name}](https://github.com/${{ github.repository }}/releases/download/${TAG}/${name})"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
