@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:vce1_sakuraview/core/theme/app_theme.dart';
+import 'package:vce1_sakuraview/core/utils/post_normalization.dart';
 import 'package:vce1_sakuraview/pages/about_page.dart';
 import 'package:vce1_sakuraview/pages/site_accounts_page.dart';
+import 'package:vce1_sakuraview/pages/source_management_page.dart';
+import 'package:vce1_sakuraview/providers/settings_provider.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/providers/theme_provider.dart';
 import 'package:vce1_sakuraview/utils/download_settings_page.dart';
 import 'package:vce1_sakuraview/utils/proxy_settings_page.dart';
+import 'package:vce1_sakuraview/utils/settings_service.dart';
 
+/// 规范化设置页：遵循 Less is More，按「内容与显示 / 浏览与加载 / 外观 / 图源与网络 / 系统」分层归类。
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
 
@@ -17,102 +22,231 @@ class SettingsPage extends StatelessWidget {
     final cs = theme.colorScheme;
     final themeProvider = context.watch<ThemeProvider>();
     final siteProvider = context.watch<SiteConfigProvider>();
+    final settingsProvider = SettingsProvider.maybeOf(context);
+
+    final showGroupBadge = settingsProvider?.showGroupBadge ?? true;
+    final showR18Badge = settingsProvider?.showR18Badge ?? true;
+    final preloadImages = settingsProvider?.preloadImages ?? true;
+    final viewOriginalByDefault =
+        settingsProvider?.viewOriginalByDefault ?? false;
+    final gridSizePreset =
+        settingsProvider?.gridSizePreset ?? GridSizePreset.standard;
+    final floatingNavMode =
+        settingsProvider?.floatingNavMode ?? FloatingNavMode.auto;
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('系统设置', style: TextStyle(fontWeight: FontWeight.bold)),
-        elevation: 0,
+        leading: IconButton(
+          tooltip: '返回',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
+        title: const Text('设置'),
       ),
-      body: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720),
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         children: <Widget>[
-          // Section 1: Appearance & Theme
-          _buildSectionHeader(context, '界面与外观', Icons.palette_outlined),
-          Card(
-            margin: const EdgeInsets.only(top: 8, bottom: 16),
+          _buildSectionHeader(context, '内容与显示'),
+          _SettingsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '内容分级筛选',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w500,
+                          color: cs.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: RatingFilterMode.values.map((mode) {
+                          return ChoiceChip(
+                            label: Text(mode.displayLabel),
+                            selected: siteProvider.ratingFilter == mode,
+                            onSelected: (selected) {
+                              if (selected) {
+                                siteProvider.setRatingFilter(mode);
+                              }
+                            },
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1, indent: 16),
+                SwitchListTile(
+                  secondary: const Icon(Icons.explicit_outlined, size: 22),
+                  title: const Text('显示 R18 标记'),
+                  value: showR18Badge,
+                  onChanged: (val) => settingsProvider?.setShowR18Badge(val),
+                  dense: true,
+                ),
+                const Divider(height: 1, indent: 48),
+                SwitchListTile(
+                  secondary: const Icon(Icons.photo_library_outlined, size: 22),
+                  title: const Text('显示图组标记'),
+                  value: showGroupBadge,
+                  onChanged: (val) => settingsProvider?.setShowGroupBadge(val),
+                  dense: true,
+                ),
+                const Divider(height: 1, indent: 16),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '预览卡片尺寸',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w500,
+                          color: cs.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: GridSizePreset.values.map((preset) {
+                          return ChoiceChip(
+                            label: Text(preset.label),
+                            selected: gridSizePreset == preset,
+                            onSelected: (selected) {
+                              if (selected) {
+                                settingsProvider?.setGridSizePreset(preset);
+                              }
+                            },
+                          );
+                        }).toList(),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        '首页底部悬浮栏',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w500,
+                          color: cs.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: FloatingNavMode.values.map((mode) {
+                          return ChoiceChip(
+                            label: Text(mode.label),
+                            selected: floatingNavMode == mode,
+                            onSelected: (selected) {
+                              if (selected) {
+                                settingsProvider?.setFloatingNavMode(mode);
+                              }
+                            },
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          _buildSectionHeader(context, '浏览与加载'),
+          _SettingsCard(
+            child: Column(
+              children: [
+                SwitchListTile(
+                  secondary: const Icon(Icons.hd_outlined, size: 22),
+                  title: const Text('查看图片默认加载原图 (HD)'),
+                  value: viewOriginalByDefault,
+                  onChanged: (val) =>
+                      settingsProvider?.setViewOriginalByDefault(val),
+                  dense: true,
+                ),
+                const Divider(height: 1, indent: 48),
+                SwitchListTile(
+                  secondary: const Icon(Icons.bolt_rounded, size: 22),
+                  title: const Text('预加载图片'),
+                  value: preloadImages,
+                  onChanged: (val) => settingsProvider?.setPreloadImages(val),
+                  dense: true,
+                ),
+              ],
+            ),
+          ),
+
+          _buildSectionHeader(context, '外观'),
+          _SettingsCard(
             child: Padding(
-              padding: const EdgeInsets.all(16.0),
+              padding: const EdgeInsets.all(14.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '主题显示模式',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
+                    '模式',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurface,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: ThemeVariant.values.map((v) {
-                      final isSelected = themeProvider.variant == v;
                       return ChoiceChip(
                         label: Text(v.label),
-                        selected: isSelected,
+                        selected: themeProvider.variant == v,
                         onSelected: (val) {
                           if (val) themeProvider.setVariant(v);
                         },
                       );
                     }).toList(),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
                   const Divider(height: 1),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   Text(
-                    '主题强调色 (Material 3 Seed)',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
+                    '配色',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurface,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   Wrap(
-                    spacing: 12,
+                    spacing: 8,
                     runSpacing: 8,
                     children: SakuraColorSeed.values.map((seed) {
-                      final isSelected = themeProvider.colorSeed == seed;
-                      return InkWell(
-                        onTap: () => themeProvider.setColorSeed(seed),
-                        borderRadius: BorderRadius.circular(999),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 6,
-                          ),
+                      return ChoiceChip(
+                        label: Text(seed.label),
+                        selected: themeProvider.colorSeed == seed,
+                        avatar: Container(
+                          width: 12,
+                          height: 12,
                           decoration: BoxDecoration(
-                            color: isSelected
-                                ? seed.seedColor.withValues(alpha: 0.2)
-                                : cs.surfaceContainerHighest.withValues(alpha: 0.4),
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(
-                              color: isSelected ? seed.seedColor : Colors.transparent,
-                              width: 2,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 14,
-                                height: 14,
-                                decoration: BoxDecoration(
-                                  color: seed.seedColor,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                seed.label,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                  color: isSelected ? seed.seedColor : cs.onSurface,
-                                ),
-                              ),
-                            ],
+                            color: seed.seedColor,
+                            shape: BoxShape.circle,
                           ),
                         ),
+                        onSelected: (val) {
+                          if (val) themeProvider.setColorSeed(seed);
+                        },
                       );
                     }).toList(),
                   ),
@@ -121,20 +255,33 @@ class SettingsPage extends StatelessWidget {
             ),
           ),
 
-          // Section 2: Accounts & Sites
-          _buildSectionHeader(context, '站点账户与会话', Icons.account_circle_outlined),
-          Card(
-            margin: const EdgeInsets.only(top: 8, bottom: 16),
+          _buildSectionHeader(context, '图源与网络'),
+          _SettingsCard(
             child: Column(
               children: [
                 ListTile(
-                  leading: Icon(Icons.badge_outlined, color: cs.primary),
-                  title: const Text('多站点账户管理与网页登录'),
+                  leading: const Icon(Icons.hub_outlined, size: 22),
+                  title: const Text('图源管理'),
                   subtitle: Text(
-                    '独立配置 Danbooru、Yande.re、Zerochan 凭据、Cookie 与 User-Agent',
-                    style: theme.textTheme.bodySmall,
+                    '当前：${siteProvider.currentSource.name} · ${siteProvider.enabledSources.length}/${siteProvider.allSources.length}',
+                    style: const TextStyle(fontSize: 12),
                   ),
-                  trailing: const Icon(Icons.chevron_right_rounded),
+                  trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+                  dense: true,
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const SourceManagementPage(),
+                      ),
+                    );
+                  },
+                ),
+                const Divider(height: 1, indent: 48),
+                ListTile(
+                  leading: const Icon(Icons.manage_accounts_outlined, size: 22),
+                  title: const Text('站点账号'),
+                  trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+                  dense: true,
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
@@ -143,67 +290,45 @@ class SettingsPage extends StatelessWidget {
                     );
                   },
                 ),
-                const Divider(height: 1, indent: 56),
-                SwitchListTile(
-                  secondary: Icon(Icons.security_outlined, color: cs.primary),
-                  title: const Text('安全模式 (Safe Mode)'),
-                  subtitle: const Text('自动过滤成人与敏感级内容 (Rating: e/q)'),
-                  value: siteProvider.config.safeMode,
-                  onChanged: (val) {
-                    siteProvider.setSafeMode(val);
+                const Divider(height: 1, indent: 48),
+                ListTile(
+                  leading: const Icon(Icons.router_outlined, size: 22),
+                  title: const Text('网络代理'),
+                  trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+                  dense: true,
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const ProxySettingsPage(),
+                      ),
+                    );
+                  },
+                ),
+                const Divider(height: 1, indent: 48),
+                ListTile(
+                  leading: const Icon(Icons.tune_rounded, size: 22),
+                  title: const Text('下载设置'),
+                  trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+                  dense: true,
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const DownloadSettingsPage(),
+                      ),
+                    );
                   },
                 ),
               ],
             ),
           ),
 
-          // Section 3: Network & Proxy
-          _buildSectionHeader(context, '网络与连接', Icons.hub_outlined),
-          Card(
-            margin: const EdgeInsets.only(top: 8, bottom: 16),
+          _buildSectionHeader(context, '系统'),
+          _SettingsCard(
             child: ListTile(
-              leading: Icon(Icons.router_outlined, color: cs.primary),
-              title: const Text('网络代理策略与连通性测试'),
-              subtitle: const Text('跟随系统代理 / 自定义 HTTP 代理 / 直连模式'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const ProxySettingsPage(),
-                  ),
-                );
-              },
-            ),
-          ),
-
-          // Section 4: Downloads & Storage
-          _buildSectionHeader(context, '下载与存储管理', Icons.folder_open_outlined),
-          Card(
-            margin: const EdgeInsets.only(top: 8, bottom: 16),
-            child: ListTile(
-              leading: Icon(Icons.file_download_outlined, color: cs.primary),
-              title: const Text('下载存储位置与路径设置'),
-              subtitle: const Text('公开相册 Pictures / 下载目录 / DCIM / 应用私有 / 自定义'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const DownloadSettingsPage(),
-                  ),
-                );
-              },
-            ),
-          ),
-
-          // Section 5: About
-          _buildSectionHeader(context, '关于与致谢', Icons.info_outline_rounded),
-          Card(
-            margin: const EdgeInsets.only(top: 8, bottom: 24),
-            child: ListTile(
-              leading: Icon(Icons.filter_vintage_rounded, color: cs.primary),
-              title: const Text('关于 SakuraView'),
-              subtitle: const Text('感谢使用、项目架构、多站点支持与开源致谢'),
-              trailing: const Icon(Icons.chevron_right_rounded),
+              leading: const Icon(Icons.info_outline_rounded, size: 22),
+              title: const Text('关于'),
+              trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+              dense: true,
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -214,28 +339,42 @@ class SettingsPage extends StatelessWidget {
             ),
           ),
         ],
+          ),
+        ),
       ),
     );
   }
 
-  Widget _buildSectionHeader(BuildContext context, String title, IconData icon) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+  Widget _buildSectionHeader(BuildContext context, String title) {
+    final cs = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 2),
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: cs.primary),
-          const SizedBox(width: 8),
-          Text(
-            title,
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: cs.primary,
-            ),
-          ),
-        ],
+      padding: const EdgeInsets.only(left: 4, top: 4),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          color: cs.primary,
+        ),
       ),
+    );
+  }
+}
+
+class _SettingsCard extends StatelessWidget {
+  final Widget child;
+  const _SettingsCard({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Card(
+      elevation: 0,
+      color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+      margin: const EdgeInsets.only(top: 6, bottom: 14),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      clipBehavior: Clip.antiAlias,
+      child: child,
     );
   }
 }

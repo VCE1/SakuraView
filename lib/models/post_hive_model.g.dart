@@ -33,13 +33,26 @@ class PostHiveModelAdapter extends TypeAdapter<PostHiveModel> {
       ..fileUrl = fields[13] as String?
       ..fileExt = fields[14] as String?
       ..hasChildren = fields[15] as bool?
-      ..localPath = fields[16] as String?;
+      ..localPath = fields[16] as String?
+      ..parentId = fields[17] as int?
+      ..siteName = fields[18] as String?
+      ..uploader = fields[19] as String?
+      ..artistTags = (fields[20] as List?)?.cast<String>()
+      ..characterTags = (fields[21] as List?)?.cast<String>()
+      ..copyrightTags = (fields[22] as List?)?.cast<String>()
+      ..generalTags = (fields[23] as List?)?.cast<String>()
+      ..metaTags = (fields[24] as List?)?.cast<String>()
+      ..previewWidth = fields[25] as int?
+      ..previewHeight = fields[26] as int?
+      ..poolId = fields[27] as int?
+      ..poolName = fields[28] as String?
+      ..pixivId = fields[29] as int?;
   }
 
   @override
   void write(BinaryWriter writer, PostHiveModel obj) {
     writer
-      ..writeByte(17) // 字段总数是 17 (0 到 16)
+      ..writeByte(30)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -73,7 +86,33 @@ class PostHiveModelAdapter extends TypeAdapter<PostHiveModel> {
       ..writeByte(15)
       ..write(obj.hasChildren)
       ..writeByte(16)
-      ..write(obj.localPath);
+      ..write(obj.localPath)
+      ..writeByte(17)
+      ..write(obj.parentId)
+      ..writeByte(18)
+      ..write(obj.siteName)
+      ..writeByte(19)
+      ..write(obj.uploader)
+      ..writeByte(20)
+      ..write(obj.artistTags)
+      ..writeByte(21)
+      ..write(obj.characterTags)
+      ..writeByte(22)
+      ..write(obj.copyrightTags)
+      ..writeByte(23)
+      ..write(obj.generalTags)
+      ..writeByte(24)
+      ..write(obj.metaTags)
+      ..writeByte(25)
+      ..write(obj.previewWidth)
+      ..writeByte(26)
+      ..write(obj.previewHeight)
+      ..writeByte(27)
+      ..write(obj.poolId)
+      ..writeByte(28)
+      ..write(obj.poolName)
+      ..writeByte(29)
+      ..write(obj.pixivId);
   }
 
   @override

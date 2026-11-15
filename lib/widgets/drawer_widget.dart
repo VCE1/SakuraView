@@ -1,223 +1,362 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:vce1_sakuraview/core/utils/post_normalization.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
-import 'package:vce1_sakuraview/providers/theme_provider.dart';
-import 'package:vce1_sakuraview/models/site_config.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_logo_icon.dart';
 
-class AppDrawer extends StatefulWidget {
+/// Clean, anti-redundant navigation drawer.
+/// Strict adherence to Less is More:
+/// - No verbose slogans, promotional texts or subtitles
+/// - No rainbow colors or heavy gradients
+/// - Flat single-level list with clear concise items
+class AppDrawer extends StatelessWidget {
   final bool isSafeMode;
-  final Function(bool) onSafeModeChanged;
-  final ValueChanged<ImageSite>? onSiteChanged;
-  final Function() onHomeTapped;
-  final Function() onFavoritesTapped;
-  final Function() onDownloadsTapped;
-  final Function() onSearchTapped;
-  final Function() onHistoryTapped;
-  final Function() onFollowTapped;
-  final Function() onRankingTapped;
-  final Function() onSettingsTapped;
+  final ValueChanged<bool> onSafeModeChanged;
+  final RatingFilterMode? ratingFilter;
+  final ValueChanged<RatingFilterMode>? onRatingFilterChanged;
+  final ValueChanged<String>? onSiteChanged;
+  final VoidCallback onHomeTapped;
+  final VoidCallback onFavoritesTapped;
+  final VoidCallback onDownloadsTapped;
+  final VoidCallback onSearchTapped;
+  final VoidCallback? onHistoryTapped;
+  final VoidCallback? onBlacklistTapped;
+  final VoidCallback? onSiteAccountsTapped;
+  final VoidCallback? onSettingsTapped;
+  final VoidCallback? onAboutTapped;
+  final int activeIndex;
 
   const AppDrawer({
     super.key,
     required this.isSafeMode,
-    required this.onHomeTapped,
     required this.onSafeModeChanged,
+    this.ratingFilter,
+    this.onRatingFilterChanged,
     this.onSiteChanged,
+    required this.onHomeTapped,
     required this.onFavoritesTapped,
     required this.onDownloadsTapped,
     required this.onSearchTapped,
-    required this.onHistoryTapped,
-    required this.onFollowTapped,
-    required this.onRankingTapped,
-    required this.onSettingsTapped,
+    this.onHistoryTapped,
+    this.onBlacklistTapped,
+    this.onSiteAccountsTapped,
+    this.onSettingsTapped,
+    this.onAboutTapped,
+    this.activeIndex = 0,
   });
 
-  @override
-  State<AppDrawer> createState() => _AppDrawerState();
-}
+  void _showSiteSelectionSheet(BuildContext context, SiteConfigProvider siteConfig) {
+    final enabled = siteConfig.enabledSources;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+                child: Row(
+                  children: [
+                    const Icon(Icons.swap_horiz_rounded, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      '切换图站',
+                      style: Theme.of(sheetCtx).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              ...enabled.map((source) {
+                final isSelected = source.id == siteConfig.currentSourceId;
+                return ListTile(
+                  leading: Icon(
+                    isSelected
+                        ? Icons.radio_button_checked_rounded
+                        : Icons.radio_button_off_rounded,
+                    color: isSelected ? Theme.of(sheetCtx).colorScheme.primary : null,
+                  ),
+                  title: Text(
+                    source.name,
+                    style: TextStyle(
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                  trailing: Text(
+                    source.id.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(sheetCtx).colorScheme.outline,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.of(sheetCtx).pop();
+                    if (onSiteChanged != null) {
+                      onSiteChanged!(source.id);
+                    } else {
+                      siteConfig.setSourceById(source.id);
+                    }
+                  },
+                );
+              }),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
-class _AppDrawerState extends State<AppDrawer> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final siteConfig = context.watch<SiteConfigProvider>();
+    final currentSource = siteConfig.currentSource;
+
     return Drawer(
       child: Column(
-        children: <Widget>[
+        children: [
+          // Header Area: clean surface, no heavy gradients
           Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  theme.colorScheme.primary,
-                  theme.colorScheme.secondary,
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-            ),
+            width: double.infinity,
+            color: cs.surfaceContainer,
             child: SafeArea(
               bottom: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                child: Row(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    CircleAvatar(
-                      radius: 24,
-                      backgroundColor: Colors.white.withAlpha(60),
-                      child: const Icon(
-                        Icons.local_florist,
-                        color: Colors.white,
-                        size: 28,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    Row(
                       children: [
+                        const SakuraLogoIcon(size: 30),
+                        const SizedBox(width: 10),
                         Text(
                           'SakuraView',
                           style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
                             fontSize: 18,
-                          ),
-                        ),
-                        Text(
-                          'Anime Image Viewer',
-                          style: TextStyle(
-                            color: Colors.white70,
-                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: cs.onSurface,
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Current Site Selector
+                    InkWell(
+                      borderRadius: BorderRadius.circular(10),
+                      onTap: () => _showSiteSelectionSheet(context, siteConfig),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 7,
+                        ),
+                        decoration: BoxDecoration(
+                          color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.cloud_outlined,
+                              size: 16,
+                              color: cs.primary,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                currentSource.name,
+                                style: TextStyle(
+                                  color: cs.onSurface,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                            Icon(
+                              Icons.unfold_more_rounded,
+                              color: cs.outline,
+                              size: 18,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
                 ),
               ),
             ),
           ),
+
+          const Divider(height: 1),
+
+          // Navigation Items: simple, flat list without clutter
           Expanded(
-            child: ClipRRect(
-              borderRadius: const BorderRadius.only(
-                bottomRight: Radius.circular(24),
-              ),
-              child: ListView(
-                padding: EdgeInsets.zero,
-                children: <Widget>[
-                  _DrawerTile(
-                    icon: Icons.home_outlined,
-                    title: 'Home',
-                    onTap: widget.onHomeTapped,
-                  ),
-                  _DrawerTile(
-                    icon: Icons.favorite_outline,
-                    title: 'Favorites',
-                    onTap: widget.onFavoritesTapped,
-                  ),
-                  _DrawerTile(
-                    icon: Icons.download_outlined,
-                    title: 'Downloads',
-                    onTap: widget.onDownloadsTapped,
-                  ),
-                  _DrawerTile(
-                    icon: Icons.search,
-                    title: 'Search',
-                    onTap: widget.onSearchTapped,
-                  ),
-                  const Divider(indent: 16, endIndent: 16),
-                  Consumer<SiteConfigProvider>(
-                    builder: (context, siteConfig, child) {
-                      return ExpansionTile(
-                        leading: const Icon(Icons.cloud_outlined),
-                        title: const Text('Image Site'),
-                        subtitle: Text(
-                          siteConfig.config.site.displayName,
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                        initiallyExpanded: false,
-                        childrenPadding: EdgeInsets.zero,
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              children: [
+                _DrawerNavTile(
+                  icon: Icons.explore_outlined,
+                  title: '发现',
+                  isSelected: activeIndex == 0,
+                  onTap: () {
+                    Navigator.pop(context);
+                    onHomeTapped();
+                  },
+                ),
+                _DrawerNavTile(
+                  icon: Icons.search_rounded,
+                  title: '搜索',
+                  isSelected: activeIndex == 1,
+                  onTap: () {
+                    Navigator.pop(context);
+                    onSearchTapped();
+                  },
+                ),
+                _DrawerNavTile(
+                  icon: Icons.favorite_outline_rounded,
+                  title: '收藏',
+                  isSelected: activeIndex == 2,
+                  onTap: () {
+                    Navigator.pop(context);
+                    onFavoritesTapped();
+                  },
+                ),
+                _DrawerNavTile(
+                  icon: Icons.download_outlined,
+                  title: '下载',
+                  isSelected: false,
+                  onTap: () {
+                    Navigator.pop(context);
+                    onDownloadsTapped();
+                  },
+                ),
+                _DrawerNavTile(
+                  icon: Icons.history_rounded,
+                  title: '历史',
+                  isSelected: false,
+                  onTap: () {
+                    Navigator.pop(context);
+                    onHistoryTapped?.call();
+                  },
+                ),
+                _DrawerNavTile(
+                  icon: Icons.block_rounded,
+                  title: '黑名单',
+                  isSelected: false,
+                  onTap: () {
+                    Navigator.pop(context);
+                    onBlacklistTapped?.call();
+                  },
+                ),
+
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: Divider(height: 1),
+                ),
+
+                Builder(
+                  builder: (context) {
+                    final activeMode = ratingFilter ??
+                        (isSafeMode
+                            ? RatingFilterMode.safe
+                            : RatingFilterMode.all);
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          RadioGroup<ImageSite>(
-                            groupValue: siteConfig.config.site,
-                            onChanged: (value) {
-                              if (value != null) {
-                                Navigator.pop(context);
-                                if (widget.onSiteChanged != null) {
-                                  widget.onSiteChanged!(value);
-                                } else {
-                                  siteConfig.setSite(value);
-                                }
-                              }
-                            },
-                            child: Column(
-                              children: ImageSite.values.map((site) {
-                                return RadioListTile<ImageSite>(
-                                  title: Text(site.displayName),
-                                  value: site,
-                                  dense: true,
-                                );
-                              }).toList(),
-                            ),
+                          Row(
+                            children: [
+                              Icon(
+                                activeMode.isR18Only
+                                    ? Icons.explicit_rounded
+                                    : (activeMode.isSafe
+                                        ? Icons.shield_outlined
+                                        : Icons.layers_outlined),
+                                size: 20,
+                                color: activeMode.isR18Only
+                                    ? cs.error
+                                    : (activeMode.isSafe
+                                        ? cs.primary
+                                        : cs.onSurfaceVariant),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                '内容筛选',
+                                style: TextStyle(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w500,
+                                  color: cs.onSurface,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: RatingFilterMode.values.map((mode) {
+                              final selected = activeMode == mode;
+                              return ChoiceChip(
+                                label: Text(
+                                  mode.shortLabel,
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                selected: selected,
+                                visualDensity: VisualDensity.compact,
+                                onSelected: (_) {
+                                  if (onRatingFilterChanged != null) {
+                                    onRatingFilterChanged!(mode);
+                                  } else {
+                                    onSafeModeChanged(mode.isSafe);
+                                  }
+                                },
+                              );
+                            }).toList(),
                           ),
                         ],
-                      );
-                    },
-                  ),
-                  const Divider(indent: 16, endIndent: 16),
-                  Consumer<SiteConfigProvider>(
-                    builder: (context, siteConfig, child) {
-                      return SwitchListTile(
-                        title: const Text('Safe Mode'),
-                        value: siteConfig.config.safeMode,
-                        onChanged: (bool value) {
-                          widget.onSafeModeChanged(value);
-                        },
-                        secondary: const Icon(Icons.shield_outlined),
-                        dense: true,
-                      );
-                    },
-                  ),
-                  Consumer<ThemeProvider>(
-                    builder: (context, themeProvider, child) {
-                      return ExpansionTile(
-                        leading: Icon(
-                          themeProvider.isDarkMode
-                              ? Icons.dark_mode
-                              : Icons.light_mode,
-                        ),
-                        title: const Text('Theme'),
-                        subtitle: Text(themeProvider.variant.label),
-                        initiallyExpanded: false,
-                        childrenPadding: EdgeInsets.zero,
-                        children: [
-                          RadioGroup<ThemeVariant>(
-                            groupValue: themeProvider.variant,
-                            onChanged: (value) {
-                              if (value != null) {
-                                Navigator.pop(context);
-                                themeProvider.setVariant(value);
-                              }
-                            },
-                            child: Column(
-                              children: ThemeVariant.values.map((v) {
-                                return RadioListTile<ThemeVariant>(
-                                  title: Text(v.label),
-                                  value: v,
-                                  dense: true,
-                                );
-                              }).toList(),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                  _DrawerTile(
-                    icon: Icons.settings_outlined,
-                    title: 'Settings',
-                    onTap: widget.onSettingsTapped,
-                  ),
-                ],
-              ),
+                      ),
+                    );
+                  },
+                ),
+                _DrawerNavTile(
+                  icon: Icons.manage_accounts_outlined,
+                  title: '账号',
+                  isSelected: false,
+                  onTap: () {
+                    Navigator.pop(context);
+                    onSiteAccountsTapped?.call();
+                  },
+                ),
+                _DrawerNavTile(
+                  icon: Icons.settings_outlined,
+                  title: '设置',
+                  isSelected: false,
+                  onTap: () {
+                    Navigator.pop(context);
+                    onSettingsTapped?.call();
+                  },
+                ),
+                _DrawerNavTile(
+                  icon: Icons.info_outline_rounded,
+                  title: '关于',
+                  isSelected: false,
+                  onTap: () {
+                    Navigator.pop(context);
+                    onAboutTapped?.call();
+                  },
+                ),
+              ],
             ),
           ),
         ],
@@ -226,23 +365,42 @@ class _AppDrawerState extends State<AppDrawer> {
   }
 }
 
-class _DrawerTile extends StatelessWidget {
+class _DrawerNavTile extends StatelessWidget {
   final IconData icon;
   final String title;
+  final bool isSelected;
   final VoidCallback onTap;
 
-  const _DrawerTile({
+  const _DrawerNavTile({
     required this.icon,
     required this.title,
+    required this.isSelected,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(icon),
-      title: Text(title),
-      onTap: onTap,
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+      child: ListTile(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+        selected: isSelected,
+        selectedTileColor: cs.primaryContainer.withValues(alpha: 0.35),
+        selectedColor: cs.primary,
+        leading: Icon(icon, size: 22),
+        title: Text(
+          title,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+          ),
+        ),
+        dense: true,
+        onTap: onTap,
+      ),
     );
   }
 }

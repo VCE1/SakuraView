@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:vce1_sakuraview/core/sources/adapters/danbooru_source_adapter.dart';
+import 'package:vce1_sakuraview/core/sources/image_source_adapter.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
 import 'package:vce1_sakuraview/utils/favorites.dart';
 
@@ -7,6 +9,7 @@ class FavoritesNotifier extends ChangeNotifier {
   final Set<String> _favoriteIdentifiers = {};
 
   final List<Map<String, dynamic>> _cloudItems = [];
+  String _cloudSiteId = '';
   bool _isCloudLoading = false;
   String? _cloudError;
   int _cloudPage = 1;
@@ -31,6 +34,7 @@ class FavoritesNotifier extends ChangeNotifier {
 
   List<Map<String, dynamic>> get favoriteItems => _favoriteItems;
   List<Map<String, dynamic>> get cloudItems => _cloudItems;
+  String get cloudSiteId => _cloudSiteId;
   bool get isCloudLoading => _isCloudLoading;
   String? get cloudError => _cloudError;
   bool get hasMoreCloud => _hasMoreCloud;
@@ -43,13 +47,22 @@ class FavoritesNotifier extends ChangeNotifier {
     Map<String, dynamic> postData, {
     String? siteName,
   }) async {
+    await _toggleLocalFavorite(postData, siteName: siteName);
+  }
+
+  Future<bool> _toggleLocalFavorite(
+    Map<String, dynamic> postData, {
+    String? siteName,
+  }) async {
     final String identifier =
         (postData['id']?.toString() ?? postData['file_url']) as String;
+    final bool nowFav;
     if (_favoriteIdentifiers.contains(identifier)) {
       await FavoritesManager.removeFavorite(identifier);
       _favoriteItems.removeWhere(
           (item) => (item['id']?.toString() ?? item['file_url']) == identifier);
       _favoriteIdentifiers.remove(identifier);
+      nowFav = false;
     } else {
       final copy = Map<String, dynamic>.from(postData);
       if (siteName != null && (copy['site'] == null || copy['site'] == '')) {
@@ -57,20 +70,92 @@ class FavoritesNotifier extends ChangeNotifier {
       }
       await FavoritesManager.addFavorite(copy);
       await _loadFavorites();
+      nowFav = true;
     }
     notifyListeners();
+    return nowFav;
+  }
+
+  /// 切换本地收藏，并在适配器支持云端收藏且已登录时同步到站点云端。
+  Future<({bool isFavorite, bool cloudSynced, String? cloudMessage})>
+      toggleFavoriteWithCloudSync(
+    Map<String, dynamic> postData, {
+    String? siteName,
+    ImageSourceAdapter? adapter,
+  }) async {
+    final nowFav = await _toggleLocalFavorite(postData, siteName: siteName);
+    if (adapter == null || !adapter.descriptor.capabilities.supportsCloudFavorites) {
+      return (isFavorite: nowFav, cloudSynced: false, cloudMessage: null);
+    }
+
+    final postId = postData['id']?.toString().trim() ?? '';
+    if (postId.isEmpty) {
+      return (isFavorite: nowFav, cloudSynced: false, cloudMessage: null);
+    }
+
+    if (!adapter.hasWriteCredentials) {
+      return (
+        isFavorite: nowFav,
+        cloudSynced: false,
+        cloudMessage: '已保存到本地收藏（配置 Danbooru 用户名 + API Key 或网页登录后可同步云端）',
+      );
+    }
+
+    try {
+      final ok = nowFav
+          ? await adapter.addCloudFavorite(postId)
+          : await adapter.removeCloudFavorite(postId);
+      if (ok &&
+          (_cloudSiteId.isEmpty || _cloudSiteId == adapter.descriptor.id)) {
+        if (nowFav) {
+          final exists =
+              _cloudItems.any((e) => e['id']?.toString() == postId);
+          if (!exists) {
+            final copy = Map<String, dynamic>.from(postData);
+            copy['site'] = adapter.descriptor.id;
+            copy['site_id'] = adapter.descriptor.id;
+            _cloudItems.insert(0, copy);
+          }
+        } else {
+          _cloudItems.removeWhere((e) => e['id']?.toString() == postId);
+        }
+        notifyListeners();
+      }
+      return (
+        isFavorite: nowFav,
+        cloudSynced: ok,
+        cloudMessage: ok
+            ? (nowFav
+                ? '已收藏并同步到 ${adapter.descriptor.name} 云端'
+                : '已取消本地及 ${adapter.descriptor.name} 云端收藏')
+            : null,
+      );
+    } catch (e) {
+      final reason = e.toString().replaceFirst('ApiException: ', '');
+      return (
+        isFavorite: nowFav,
+        cloudSynced: false,
+        cloudMessage: '本地收藏已更新，云端同步失败：$reason',
+      );
+    }
   }
 
   Future<void> fetchCloudFavorites(
     SiteConfigProvider siteProvider, {
     bool clear = false,
   }) async {
-    if (clear) {
+    final siteId = siteProvider.currentSourceId;
+    final siteChanged = _cloudSiteId.isNotEmpty && _cloudSiteId != siteId;
+    if (clear || siteChanged) {
       _cloudItems.clear();
+      _cloudSiteId = siteId;
       _cloudPage = 1;
       _hasMoreCloud = true;
       _cloudError = null;
       notifyListeners();
+    }
+    if (_cloudSiteId.isEmpty) {
+      _cloudSiteId = siteId;
     }
     if (_isCloudLoading || !_hasMoreCloud) return;
 
@@ -79,21 +164,45 @@ class FavoritesNotifier extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final site = siteProvider.config.site;
+      final adapter = siteProvider.apiClient;
+      if (adapter is DanbooruSourceAdapter) {
+        final creds = siteProvider.credentialsForSource(siteId);
+        if (creds.username.trim().isEmpty || creds.username.contains('@')) {
+          final profile = await adapter.resolveAuthenticatedProfile();
+          if (profile != null && profile.name.isNotEmpty) {
+            await siteProvider.updateCredentialsById(
+              siteId,
+              username: profile.name,
+              userId: profile.id.isNotEmpty ? profile.id : null,
+            );
+          }
+        }
+      }
+
       final posts = await siteProvider.apiClient.fetchCloudFavorites(
         page: _cloudPage,
         limit: 40,
         safeMode: siteProvider.config.safeMode,
+        ratingFilter: siteProvider.ratingFilter,
       );
       if (posts.isEmpty) {
         _hasMoreCloud = false;
       } else {
+        final existingIds =
+            _cloudItems.map((e) => e['id']?.toString() ?? '').toSet();
         for (final p in posts) {
-          final map = p.toApiMap();
-          map['site'] = site.name;
+          final idStr = p.id.toString();
+          if (existingIds.contains(idStr)) continue;
+          existingIds.add(idStr);
+          final map = p.toApiMap(siteName: siteId);
+          map['site'] = siteId;
+          map['site_id'] = siteId;
           _cloudItems.add(map);
         }
         _cloudPage++;
+        if (posts.length < 40) {
+          _hasMoreCloud = false;
+        }
       }
     } catch (e) {
       _cloudError = e.toString().replaceFirst('ApiException: ', '');

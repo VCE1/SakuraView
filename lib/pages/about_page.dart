@@ -1,370 +1,429 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../core/config/app_build_info.dart';
+import '../widgets/common/sakura_logo_icon.dart';
+
+/// 开源依赖插件元数据，名称、项目地址与官方简介均来自各依赖包的 pubspec.yaml。
+class OpenSourcePackageInfo {
+  final String name;
+  final String url;
+  final String description;
+
+  const OpenSourcePackageInfo({
+    required this.name,
+    required this.url,
+    required this.description,
+  });
+}
+
+/// 关于页面：展示项目简介、版本与构建时间，以及各开源插件的项目地址与官方简介。
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
 
+  static const String projectDescription =
+      '这是一款兴趣使然，由Flutter编写的轻量看图应用。目前支持多数booru系图站。';
+  static const String closingGreeting = '感谢使用 SakuraView，请多多指教~';
+
+  static const List<OpenSourcePackageInfo> openSourcePackages = [
+    OpenSourcePackageInfo(
+      name: 'cached_network_image',
+      url: 'https://github.com/Baseflow/flutter_cached_network_image',
+      description: 'Flutter library to load and cache network images.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'http',
+      url: 'https://github.com/dart-lang/http/tree/master/pkgs/http',
+      description: 'A composable, multi-platform, Future-based API for HTTP requests.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'flutter_staggered_grid_view',
+      url: 'https://github.com/letsar/flutter_staggered_grid_view',
+      description:
+          'Provides a collection of Flutter grids layouts (staggered, masonry, quilted, woven, etc.).',
+    ),
+    OpenSourcePackageInfo(
+      name: 'provider',
+      url: 'https://github.com/rrousselGit/provider',
+      description:
+          'A wrapper around InheritedWidget to make them easier to use and more reusable.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'photo_view',
+      url: 'https://github.com/renancaraujo/photo_view',
+      description:
+          'Photo View provides a gesture sensitive zoomable widget. Photo View is largely used to show interactive images and other stuff such as SVG.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'shared_preferences',
+      url:
+          'https://github.com/flutter/packages/tree/main/packages/shared_preferences/shared_preferences',
+      description:
+          'Flutter plugin for reading and writing simple key-value pairs.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'path_provider',
+      url:
+          'https://github.com/flutter/packages/tree/main/packages/path_provider/path_provider',
+      description:
+          'Flutter plugin for getting commonly used locations on host platform file systems, such as the temp and app data directories.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'hive',
+      url: 'https://github.com/hivedb/hive/tree/master/hive',
+      description:
+          'Lightweight and blazing fast key-value database written in pure Dart. Strongly encrypted using AES-256.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'hive_flutter',
+      url: 'https://github.com/hivedb/hive/tree/master/hive_flutter',
+      description: 'Extension for Hive. Makes it easier to use Hive in Flutter apps.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'html',
+      url: 'https://github.com/dart-lang/tools/tree/main/pkgs/html',
+      description:
+          'APIs for parsing and manipulating HTML content outside the browser.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'xml',
+      url: 'https://github.com/renggli/dart-xml',
+      description:
+          'Full-featured XML for Dart — DOM parsing, SAX streaming, XPath 3 querying, and a fluent builder API.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'url_launcher',
+      url:
+          'https://github.com/flutter/packages/tree/main/packages/url_launcher/url_launcher',
+      description:
+          'Flutter plugin for launching a URL. Supports web, phone, SMS, and email schemes.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'share_plus',
+      url:
+          'https://github.com/fluttercommunity/plus_plugins/tree/main/packages/share_plus/share_plus',
+      description:
+          'Flutter plugin for sharing content via the platform share UI, using the ACTION_SEND intent on Android and UIActivityViewController on iOS.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'photo_manager',
+      url: 'https://github.com/fluttercandies/flutter_photo_manager',
+      description:
+          'A Flutter plugin that provides album assets abstraction management APIs on Android, iOS, macOS, and OpenHarmony.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'file_picker',
+      url: 'https://github.com/miguelpruivo/flutter_file_picker',
+      description:
+          'A package that allows you to use a native file explorer to pick single or multiple absolute file paths, with extension filtering support.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'shimmer',
+      url: 'https://github.com/hnvn/flutter_shimmer',
+      description:
+          'A lightweight Flutter widget that paints a moving highlight over skeleton placeholders and call-to-action text.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'crypto',
+      url: 'https://github.com/dart-lang/core/tree/main/pkgs/crypto',
+      description: 'Implementations of SHA, MD5, and HMAC cryptographic functions.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'intl',
+      url: 'https://github.com/dart-lang/i18n/tree/main/pkgs/intl',
+      description:
+          'Contains code to deal with internationalized/localized messages, date and number formatting and parsing, bi-directional text, and other internationalization issues.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'logging',
+      url: 'https://github.com/dart-lang/core/tree/main/pkgs/logging',
+      description:
+          'Provides APIs for debugging and error logging, similar to loggers in other languages, such as the Closure JS Logger and java.util.logging.Logger.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'google_fonts',
+      url:
+          'https://github.com/flutter/packages/tree/main/packages/google_fonts',
+      description:
+          'A Flutter package to use fonts from fonts.google.com. Supports HTTP fetching, caching, and asset bundling.',
+    ),
+    OpenSourcePackageInfo(
+      name: 'bitsdojo_window',
+      url: 'https://github.com/bitsdojo/bitsdojo_window',
+      description:
+          'A package to help with creating custom windows with Flutter desktop (custom border, titlebar and minimize/maximize/close buttons) and common desktop window operations (show/hide/position on screen) for Windows and macOS',
+    ),
+    OpenSourcePackageInfo(
+      name: 'path',
+      url: 'https://github.com/dart-lang/core/tree/main/pkgs/path',
+      description:
+          'A string-based path manipulation library. All of the path operations you know and love, with solid support for Windows, POSIX (Linux and Mac OS X), and the web.',
+    ),
+  ];
+
+  Future<void> _openPackageUrl(BuildContext context, String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    final launched = await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    );
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('无法打开链接：$url')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('关于 SakuraView'),
-        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: '返回',
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
+        title: const Text('关于'),
       ),
-      body: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        children: [
-          // App Header Card
-          Card(
-            elevation: 0,
-            color: cs.primaryContainer.withValues(alpha: 0.35),
-            shape: RoundedRectangleBorder(
+      body: SelectionArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+              children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  colorScheme.primaryContainer.withValues(alpha: 0.7),
+                  colorScheme.secondaryContainer.withValues(alpha: 0.45),
+                ],
+              ),
               borderRadius: BorderRadius.circular(20),
-              side: BorderSide(color: cs.primary.withValues(alpha: 0.2)),
+              border: Border.all(
+                color: colorScheme.outlineVariant.withValues(alpha: 0.4),
+              ),
             ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-              child: Column(
-                children: [
-                  Container(
-                    width: 76,
-                    height: 76,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [cs.primary, cs.tertiary],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: cs.primary.withValues(alpha: 0.3),
-                          blurRadius: 16,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
-                    ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.filter_vintage_rounded,
-                        size: 42,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'SakuraView',
-                    style: theme.textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '版本 1.2.0 (Build 2026.11)',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.favorite_rounded, size: 14, color: cs.primary),
-                        const SizedBox(width: 6),
-                        Text(
-                          '感谢使用 SakuraView！',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: cs.primary,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const SakuraLogoIcon(size: 56),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'SakuraView',
+                            style: textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Thank You & Vision
-          _buildSectionHeader(context, '致谢与寄语', Icons.chat_bubble_outline_rounded),
-          Card(
-            margin: const EdgeInsets.only(top: 8, bottom: 16),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                '十分感谢您使用 SakuraView。\n'
-                '本应用专为动漫二次元插画爱好者倾力打造，致力于提供跨站点、统一且流畅优雅的高清插画浏览、检索、账户会话同步与本地离线归档体验。'
-                '无论您是在手机还是在平板横屏设备上，都能享受沉浸无拘的视觉盛宴。',
-                style: theme.textTheme.bodyMedium?.copyWith(height: 1.6),
-              ),
-            ),
-          ),
-
-          // Supported Sites
-          _buildSectionHeader(context, '当前支持的站点', Icons.public_rounded),
-          Card(
-            margin: const EdgeInsets.only(top: 8, bottom: 16),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                children: [
-                  _buildSiteTile(
-                    title: 'Danbooru',
-                    badge: 'API & 网页登录',
-                    desc: '全球知名的动漫标签索引数据库，支持 API 密钥授权、WebView 会话同步及云端收藏检索 (ordfav:<user>)。',
-                    color: Colors.blueAccent,
-                  ),
-                  const Divider(height: 16),
-                  _buildSiteTile(
-                    title: 'Yande.re (Moebooru)',
-                    badge: '无限制高清大图',
-                    desc: '收录海量高清动漫壁纸与插画，支持评分收藏 (vote:3:<user>) 与内置 Cookie 会话保持。',
-                    color: Colors.deepOrangeAccent,
-                  ),
-                  const Divider(height: 16),
-                  _buildSiteTile(
-                    title: 'Zerochan',
-                    badge: '角色与画风索引',
-                    desc: '角色作品标签细分导向的知名画廊，支持原图自动嗅探解析、网页登录与个人收藏同步 (fav=<user>)。',
-                    color: Colors.teal,
-                  ),
-                  const Divider(height: 16),
-                  _buildSiteTile(
-                    title: 'Konachan',
-                    badge: '壁纸社区',
-                    desc: 'Moebooru 架构的高分辨率插画站，同源兼容 Yande.re 核心引擎。',
-                    color: Colors.purpleAccent,
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Architecture & Tech Highlights
-          _buildSectionHeader(context, '项目结构与核心设计', Icons.layers_outlined),
-          Card(
-            margin: const EdgeInsets.only(top: 8, bottom: 16),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildFeatureBullet(
-                    context,
-                    title: '自适应平板横屏与手机端',
-                    desc: '横屏模式下精简顶部占用，采用大视野瀑布流网格，适配各类屏幕比例。',
-                  ),
-                  const SizedBox(height: 12),
-                  _buildFeatureBullet(
-                    context,
-                    title: 'Telegram 风格平滑动画浮动栏',
-                    desc: '支持滚动上下平滑收缩出现/消失动画，未选中态精简图标，选中态平滑展开药丸胶囊，告别文字截断。',
-                  ),
-                  const SizedBox(height: 12),
-                  _buildFeatureBullet(
-                    context,
-                    title: '独立站点账户与原生 WebView Cookie 保持',
-                    desc: '各站点独立配置 API 与登录凭据，内置原生 Android WebView 登录拦截，自动持久化会话 Cookie。',
-                  ),
-                  const SizedBox(height: 12),
-                  _buildFeatureBullet(
-                    context,
-                    title: '双重收藏机制 (云端账户 + 本地离线)',
-                    desc: '登录站点后直接查看在线云端收藏夹，并支持一键将云端作品同步转存至本地离线数据库。',
-                  ),
-                  const SizedBox(height: 12),
-                  _buildFeatureBullet(
-                    context,
-                    title: '规范化网络路由策略 (跟随系统 / 自定义 / 直连)',
-                    desc: '全面遵循操作系统网络标准，支持系统代理探测、用户指定 HTTP 代理、绕过名单与全局 TUN 隧道。',
-                  ),
-                  const SizedBox(height: 12),
-                  _buildFeatureBullet(
-                    context,
-                    title: '开放存储路径管理',
-                    desc: '支持用户自由选择公开系统相册 (Pictures/SakuraView)、下载目录 (Download)、相机相册 (DCIM) 或应用私有隔离存储。',
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Open Source Credits
-          _buildSectionHeader(context, '致敬与开源参考', Icons.code_rounded),
-          Card(
-            margin: const EdgeInsets.only(top: 8, bottom: 24),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'SakuraView 在研发与重构过程中，参考并汲取了以下优秀开源项目的成熟设计方案与灵感：',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  _buildCreditItem(context, 'pixes-app/pixes', '优雅的加载过渡动画方案与下载管理架构参考'),
-                  _buildCreditItem(context, 'Boorusama', '成熟的 Booru 多站点架构与标签检索规范参考'),
-                  _buildCreditItem(context, 'Telegram Android', '极简半透明圆角悬浮底部导航栏交互灵感'),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSectionHeader(BuildContext context, String title, IconData icon) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    return Row(
-      children: [
-        Icon(icon, size: 18, color: cs.primary),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: theme.textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.bold,
-            color: cs.primary,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSiteTile({
-    required String title,
-    required String badge,
-    required String desc,
-    required Color color,
-  }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 8,
-          height: 8,
-          margin: const EdgeInsets.only(top: 6),
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      badge,
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: color,
+                          const SizedBox(height: 2),
+                          Text(
+                            '当前版本：v${AppBuildInfo.fullVersion}',
+                            style: textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  projectDescription,
+                  style: textTheme.bodyMedium?.copyWith(height: 1.55),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surface.withValues(alpha: 0.72),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: colorScheme.outlineVariant.withValues(alpha: 0.35),
+                    ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                desc,
-                style: const TextStyle(fontSize: 12, height: 1.4),
-              ),
-            ],
+                  child: Column(
+                    children: [
+                      _MetaRow(
+                        label: '当前版本',
+                        value: 'v${AppBuildInfo.fullVersion}',
+                      ),
+                      const SizedBox(height: 6),
+                      const _MetaRow(
+                        label: '构建时间',
+                        value: AppBuildInfo.buildTime,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  closingGreeting,
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildFeatureBullet(
-    BuildContext context, {
-    required String title,
-    required String desc,
-  }) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(Icons.check_circle_rounded, size: 16, color: cs.primary),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+          const SizedBox(height: 20),
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Text(
+              '开源插件与致谢',
+              style: textTheme.titleSmall?.copyWith(
+                color: colorScheme.primary,
+                fontWeight: FontWeight.w700,
               ),
-              const SizedBox(height: 2),
-              Text(
-                desc,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                  height: 1.35,
+            ),
+          ),
+          ...openSourcePackages.map(
+            (pkg) => Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: BorderSide(
+                  color: colorScheme.outlineVariant.withValues(alpha: 0.45),
                 ),
               ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCreditItem(BuildContext context, String name, String desc) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('• ', style: TextStyle(fontWeight: FontWeight.bold, color: cs.primary)),
-          Expanded(
-            child: RichText(
-              text: TextSpan(
-                style: theme.textTheme.bodySmall?.copyWith(height: 1.4),
-                children: [
-                  TextSpan(
-                    text: '$name: ',
-                    style: TextStyle(fontWeight: FontWeight.bold, color: cs.onSurface),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => _openPackageUrl(context, pkg.url),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
                   ),
-                  TextSpan(text: desc),
-                ],
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              pkg.name,
+                              style: textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '复制项目链接',
+                            icon: Icon(
+                              Icons.content_copy_rounded,
+                              size: 16,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints(
+                              minWidth: 28,
+                              minHeight: 28,
+                            ),
+                            padding: EdgeInsets.zero,
+                            onPressed: () async {
+                              await Clipboard.setData(
+                                ClipboardData(text: pkg.url),
+                              );
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context)
+                                  ..hideCurrentSnackBar()
+                                  ..showSnackBar(
+                                    SnackBar(
+                                      content: Text('已复制 ${pkg.name} 链接'),
+                                      behavior: SnackBarBehavior.floating,
+                                      duration: const Duration(seconds: 2),
+                                    ),
+                                  );
+                              }
+                            },
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(
+                            Icons.open_in_new_rounded,
+                            size: 16,
+                            color: colorScheme.primary,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        pkg.description,
+                        style: textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        pkg.url,
+                        style: textTheme.labelSmall?.copyWith(
+                          color: colorScheme.primary,
+                          decoration: TextDecoration.underline,
+                          decorationColor: colorScheme.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
-        ],
+              ],
+            ),
+          ),
+        ),
       ),
+    );
+  }
+}
+
+class _MetaRow extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _MetaRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Row(
+      children: [
+        Text(
+          label,
+          style: textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.end,
+            style: textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

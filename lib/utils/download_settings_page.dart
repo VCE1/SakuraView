@@ -17,6 +17,7 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
   final SettingsService _settingsService = SettingsService();
 
   DownloadStoragePreset _selectedPreset = DownloadStoragePreset.publicPictures;
+  DownloadQuality _selectedQuality = DownloadQuality.original;
   Map<DownloadStoragePreset, String> _resolvedPaths = {};
   String _activePath = '';
   bool _isLoading = true;
@@ -31,6 +32,7 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
     setState(() => _isLoading = true);
 
     final preset = await _settingsService.getDownloadPreset();
+    final quality = await _settingsService.getDownloadQuality();
     final savedPath = await _settingsService.getDownloadPath();
 
     final Map<DownloadStoragePreset, String> paths = {};
@@ -45,11 +47,28 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
     if (!mounted) return;
     setState(() {
       _selectedPreset = preset;
+      _selectedQuality = quality;
       _resolvedPaths = paths;
       _activePath = savedPath ?? paths[preset] ?? '';
       _customPathController.text = _activePath;
       _isLoading = false;
     });
+  }
+
+  Future<void> _selectDownloadQuality(DownloadQuality quality) async {
+    await _settingsService.setDownloadQuality(quality);
+    if (!mounted) return;
+    setState(() => _selectedQuality = quality);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          quality == DownloadQuality.original
+              ? '默认下载画质已设为：原图'
+              : '默认下载画质已设为：中等尺寸',
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   Future<void> _selectPreset(DownloadStoragePreset preset) async {
@@ -163,98 +182,110 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
 
     if (_isLoading) {
       return Scaffold(
-        appBar: AppBar(title: const Text('下载存储与路径管理')),
+        appBar: AppBar(title: const Text('下载路径')),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     final presets = Platform.isAndroid
         ? DownloadStoragePreset.values
-        : [
-            DownloadStoragePreset.publicDownloads,
-            DownloadStoragePreset.appPrivate,
-            DownloadStoragePreset.custom,
-          ];
+        : Platform.isIOS
+            ? [
+                DownloadStoragePreset.publicDownloads,
+                DownloadStoragePreset.appPrivate,
+                DownloadStoragePreset.custom,
+              ]
+            : [
+                DownloadStoragePreset.publicDownloads,
+                DownloadStoragePreset.appPrivate,
+                DownloadStoragePreset.custom,
+              ];
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('下载存储与路径管理'),
+        leading: IconButton(
+          tooltip: '返回',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
+        title: const Text('下载设置'),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          // Active Path Banner
-          Container(
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720),
+          child: ListView(
             padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: cs.primaryContainer.withValues(alpha: 0.45),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: cs.primary.withValues(alpha: 0.25),
-              ),
+        children: [
+          Card(
+            elevation: 0,
+            color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+            margin: EdgeInsets.zero,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
             ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.folder_special_rounded, color: cs.primary, size: 26),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            '当前生效存储路径',
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              color: cs.onSurface,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _selectedPreset.isPublicStorage
-                                  ? cs.primary.withValues(alpha: 0.15)
-                                  : cs.tertiary.withValues(alpha: 0.18),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              _selectedPreset.isPublicStorage ? '公开目录' : '隔离/自定义',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: _selectedPreset.isPublicStorage
-                                    ? cs.primary
-                                    : cs.tertiary,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      SelectableText(
-                        _activePath,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          fontFamily: 'monospace',
-                          color: cs.onSurfaceVariant,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: RadioGroup<DownloadQuality>(
+                groupValue: _selectedQuality,
+                onChanged: (val) {
+                  if (val != null) {
+                    _selectDownloadQuality(val);
+                  }
+                },
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                      child: Text(
+                        '默认画质',
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          color: cs.primary,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                    const RadioListTile<DownloadQuality>(
+                      value: DownloadQuality.original,
+                      title: Text('原图'),
+                    ),
+                    const RadioListTile<DownloadQuality>(
+                      value: DownloadQuality.sample,
+                      title: Text('中等尺寸'),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-          const SizedBox(height: 16),
-
-          // Preset Radio Cards
+          const SizedBox(height: 14),
           Card(
+            elevation: 0,
+            color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
             margin: EdgeInsets.zero,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: ListTile(
+              leading: Icon(Icons.folder_outlined, color: cs.primary),
+              title: const Text('当前保存路径'),
+              subtitle: SelectableText(
+                _activePath,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontFamily: 'monospace',
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Card(
+            elevation: 0,
+            color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+            margin: EdgeInsets.zero,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: RadioGroup<DownloadStoragePreset>(
@@ -270,7 +301,7 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                       child: Text(
-                        '选择存储位置类型',
+                        '存储目录',
                         style: theme.textTheme.titleSmall?.copyWith(
                           color: cs.primary,
                           fontWeight: FontWeight.bold,
@@ -281,31 +312,19 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
                       final resolved = _resolvedPaths[preset] ?? '';
                       return RadioListTile<DownloadStoragePreset>(
                         value: preset,
-                        title: Text(
-                          preset.title,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const SizedBox(height: 2),
-                            Text(
-                              preset.subtitle,
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                            if (resolved.isNotEmpty &&
-                                preset != DownloadStoragePreset.custom) ...[
-                              const SizedBox(height: 4),
-                              Text(
-                                resolved,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontFamily: 'monospace',
-                                  color: cs.primary,
-                                ),
-                              ),
-                            ],
-                          ],
+                        title: Text(preset.title),
+                        subtitle: Text(
+                          resolved.isNotEmpty && preset != DownloadStoragePreset.custom
+                              ? resolved
+                              : preset.subtitle,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontFamily: resolved.isNotEmpty &&
+                                    preset != DownloadStoragePreset.custom
+                                ? 'monospace'
+                                : null,
+                            color: cs.onSurfaceVariant,
+                          ),
                         ),
                       );
                     }),
@@ -314,31 +333,26 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
               ),
             ),
           ),
-
-          const SizedBox(height: 16),
-
-          // Custom Directory Picker Section
+          const SizedBox(height: 14),
           Card(
+            elevation: 0,
+            color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
             margin: EdgeInsets.zero,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '自定义文件夹路径',
+                    '自定义路径',
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '您可以通过系统文件选择器指定任意文件夹，或直接输入目标目录完整路径：',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   TextField(
                     controller: _customPathController,
                     decoration: InputDecoration(
@@ -347,7 +361,7 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
                       prefixIcon: const Icon(Icons.folder_outlined),
                       suffixIcon: IconButton(
                         icon: const Icon(Icons.folder_open_rounded),
-                        tooltip: '浏览并选择文件夹',
+                        tooltip: '选择文件夹',
                         onPressed: _pickCustomFolder,
                       ),
                     ),
@@ -359,7 +373,7 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
                         child: OutlinedButton.icon(
                           onPressed: _pickCustomFolder,
                           icon: const Icon(Icons.create_new_folder_outlined, size: 18),
-                          label: const Text('从系统选择器浏览'),
+                          label: const Text('浏览'),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -367,7 +381,7 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
                         child: FilledButton.icon(
                           onPressed: _saveCustomPathText,
                           icon: const Icon(Icons.save_outlined, size: 18),
-                          label: const Text('保存当前路径'),
+                          label: const Text('保存'),
                         ),
                       ),
                     ],
@@ -377,6 +391,8 @@ class _DownloadSettingsPageState extends State<DownloadSettingsPage> {
             ),
           ),
         ],
+      ),
+        ),
       ),
     );
   }

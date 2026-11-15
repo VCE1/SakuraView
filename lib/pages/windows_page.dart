@@ -2,20 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:provider/provider.dart';
 import 'package:logging/logging.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 
-import 'package:vce1_sakuraview/models/post_hive_model.dart';
-import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
+import 'package:vce1_sakuraview/core/utils/post_normalization.dart';
+import 'package:vce1_sakuraview/pages/about_page.dart';
+import 'package:vce1_sakuraview/pages/blacklist_page.dart';
+import 'package:vce1_sakuraview/pages/history_page.dart';
+import 'package:vce1_sakuraview/pages/post_detail_page.dart';
+import 'package:vce1_sakuraview/pages/site_accounts_page.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
+import 'package:vce1_sakuraview/providers/settings_provider.dart';
 import 'package:vce1_sakuraview/providers/favorites_notifier.dart';
+import 'package:vce1_sakuraview/services/blacklist_service.dart';
 import 'package:vce1_sakuraview/utils/settings_page.dart';
+import 'package:vce1_sakuraview/utils/settings_service.dart';
 import 'package:vce1_sakuraview/widgets/drawer_widget.dart';
-import 'package:vce1_sakuraview/widgets/windows/window_full_image_screen.dart';
-import 'package:vce1_sakuraview/widgets/common/group_posts_screen.dart';
-import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
+import 'package:vce1_sakuraview/widgets/common/quick_search_drawer.dart';
+import 'package:vce1_sakuraview/widgets/common/rating_filter_pill.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
-import 'package:vce1_sakuraview/models/site_config.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_post_card.dart';
 import 'package:vce1_sakuraview/pages/search_page.dart';
 
 class WindowImageGridPage extends StatefulWidget {
@@ -29,7 +34,6 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
   List<Map<String, dynamic>> imageList = [];
   bool showFavoritesView = false;
   bool showSearchView = false;
-  String? _searchTag;
   int currentPage = 1;
   final int imagesPerPage = 40;
 
@@ -38,15 +42,17 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
   bool _hasMoreImages = true;
 
   static final Logger _logger = Logger('WindowImageGridPage');
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final ScrollController _scrollController = ScrollController();
-  final Set<int> _processingDownloads = {};
-  late Box<PostHiveModel> _postBox;
+  double? _swipeStartX;
+  double _swipeDeltaX = 0.0;
+  RatingFilterMode? _lastRatingFilter;
+  String? _lastSourceId;
 
   @override
   void initState() {
     super.initState();
     _logger.info('WindowImageGridPageState initState');
-    _postBox = Hive.box<PostHiveModel>('downloaded_posts');
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) fetchImages(clear: true);
@@ -63,12 +69,18 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
   }
 
   void _onScroll() {
-    if (showFavoritesView || showSearchView || isLoading || !_scrollController.hasClients) {
+    if (showFavoritesView ||
+        showSearchView ||
+        isLoading ||
+        !_hasMoreImages ||
+        !_scrollController.hasClients) {
       return;
     }
     final maxScroll = _scrollController.position.maxScrollExtent;
     final currentScroll = _scrollController.position.pixels;
-    if (currentScroll >= maxScroll && maxScroll > 0) {
+    if (maxScroll > 0 &&
+        currentScroll > 160 &&
+        currentScroll >= maxScroll - 800) {
       fetchImages();
     }
   }
@@ -87,13 +99,26 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
 
     try {
       final siteConfig = Provider.of<SiteConfigProvider>(context, listen: false);
+      _lastRatingFilter = siteConfig.ratingFilter;
+      _lastSourceId = siteConfig.currentSourceId;
+      final ratingFilter = siteConfig.ratingFilter;
       final apiClient = siteConfig.apiClient;
 
       final fetchedPosts = await apiClient.searchPosts(
         page: currentPage,
         limit: imagesPerPage,
-        safeMode: siteConfig.config.safeMode,
+        safeMode: siteConfig.safeMode,
+        ratingFilter: ratingFilter,
       );
+
+      final blacklist = BlacklistService.instance;
+      final incomingMaps = fetchedPosts
+          .map((p) => p.toApiMap(siteName: siteConfig.currentSourceId))
+          .where((item) =>
+              !blacklist.isPostBlocked(item) && ratingFilter.matchesPost(item))
+          .toList();
+      final previousCount = imageList.length;
+      final merged = PostGroupHelper.mergeAndDeduplicate(imageList, incomingMaps);
 
       if (!_isDisposed && mounted) {
         setState(() {
@@ -101,11 +126,32 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
             _hasMoreImages = false;
           } else {
             _hasMoreImages = true;
-            imageList.addAll(fetchedPosts.map((p) => p.toApiMap()));
+            imageList = merged;
             currentPage++;
           }
           isLoading = false;
         });
+        if (fetchedPosts.isNotEmpty && merged.length > previousCount) {
+          final width = MediaQuery.of(context).size.width;
+          final gridPreset =
+              SettingsProvider.maybeOf(context, listen: false)?.gridSizePreset ??
+                  GridSizePreset.standard;
+          final cols = gridPreset.calcColumns(width, isLandscape: true);
+          final tileCacheWidth = computeGridTileCacheWidth(
+            context,
+            columns: cols,
+          );
+          final newlyAdded = merged.sublist(previousCount);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              prefetchPostThumbnails(
+                context,
+                newlyAdded,
+                cacheWidth: tileCacheWidth,
+              );
+            }
+          });
+        }
       }
     } catch (e) {
       _logger.severe("Error fetching images: $e");
@@ -116,22 +162,30 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
         });
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: ${e.toString()}')),
+            SnackBar(content: Text(e.toString().replaceFirst('ApiException: ', ''))),
           );
         }
       }
     }
   }
 
-  void handleSafeModeChanged(bool value) {
+  void handleRatingFilterChanged(RatingFilterMode mode) {
     if (!mounted) return;
-    Provider.of<SiteConfigProvider>(context, listen: false).setSafeMode(value);
+    Provider.of<SiteConfigProvider>(context, listen: false)
+        .setRatingFilter(mode);
     fetchImages(clear: true);
   }
 
-  void handleSiteChanged(ImageSite site) {
+  void handleSafeModeChanged(bool value) {
+    handleRatingFilterChanged(
+      value ? RatingFilterMode.safe : RatingFilterMode.all,
+    );
+  }
+
+  void handleSiteChanged(String sourceId) {
     if (!mounted) return;
-    Provider.of<SiteConfigProvider>(context, listen: false).setSite(site);
+    Provider.of<SiteConfigProvider>(context, listen: false)
+        .setSourceById(sourceId);
     fetchImages(clear: true);
   }
 
@@ -141,7 +195,6 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
       showFavoritesView = false;
       showSearchView = false;
     });
-    Navigator.pop(context);
     fetchImages(clear: true);
   }
 
@@ -151,462 +204,331 @@ class WindowImageGridPageState extends State<WindowImageGridPage> {
       showFavoritesView = true;
       showSearchView = false;
     });
-    Navigator.pop(context);
   }
 
   void handleDownloadsTapped() {
-    Navigator.pop(context);
+    if (!mounted) return;
     Navigator.pushNamed(context, '/downloads');
   }
 
   void handleSettingsTapped() {
-    Navigator.pop(context);
+    if (!mounted) return;
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (context) => const SettingsPage()),
-    );
-  }
-
-  bool _isPostDownloaded(int postId) => _postBox.containsKey(postId);
-
-  void _showSnackbar(String message) {
-    ScaffoldMessenger.of(context).removeCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(milliseconds: 1200),
-      ),
+      SakuraPageRoute(builder: (context) => const SettingsPage()),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<FavoritesNotifier>(
-      builder: (context, favoritesNotifier, child) {
-        Widget bodyContent;
+    return Consumer<SiteConfigProvider>(
+      builder: (context, siteConfig, child) {
+        if (_lastRatingFilter != null &&
+            (_lastRatingFilter != siteConfig.ratingFilter ||
+                _lastSourceId != siteConfig.currentSourceId) &&
+            !isLoading) {
+          _lastRatingFilter = siteConfig.ratingFilter;
+          _lastSourceId = siteConfig.currentSourceId;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && !isLoading) {
+              fetchImages(clear: true);
+            }
+          });
+        }
+        final cs = Theme.of(context).colorScheme;
+        Widget homeContent;
 
-        if (showSearchView) {
-          bodyContent = SearchPage(initialTag: _searchTag);
-        } else if (showFavoritesView) {
-          bodyContent = FavoriteDisplayWidget(
-            favoriteItems: favoritesNotifier.favoriteItems,
-            onTagSelected: (tag) {
-              setState(() {
-                _searchTag = tag;
-                showFavoritesView = false;
-                showSearchView = true;
-              });
-            },
+        if (imageList.isEmpty && isLoading) {
+          homeContent = const Center(
+            child: CircularProgressIndicator(strokeWidth: 2.2),
           );
-        } else if (imageList.isEmpty && isLoading) {
-          bodyContent = const SakuraGridShimmer();
         } else if (imageList.isEmpty && !isLoading) {
-          bodyContent = Center(
+          homeContent = Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(Icons.cloud_off, size: 64, color: Colors.grey[400]),
                 const SizedBox(height: 10),
                 Text(
-                  'No images found.\nTry switching sites or check connection.',
+                  '未获取到图片，请重试或切换其他图站',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 16),
-                ElevatedButton.icon(
+                FilledButton.icon(
                   icon: const Icon(Icons.refresh),
-                  label: const Text('Retry'),
+                  label: const Text('重试'),
                   onPressed: () => fetchImages(clear: true),
                 ),
               ],
             ),
           );
         } else {
-          bodyContent = Consumer<BaseDownloadNotifier>(
-            builder: (context, downloadNotifier, child) {
-              return RefreshIndicator(
-                onRefresh: () => fetchImages(clear: true),
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: MasonryGridView.count(
-                    controller: _scrollController,
-                    crossAxisCount:
-                        (MediaQuery.of(context).size.width / 180)
-                            .floor()
-                            .clamp(2, 6),
-                    mainAxisSpacing: 8.0,
-                    crossAxisSpacing: 8.0,
-                    itemCount: imageList.length + (_hasMoreImages ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index == imageList.length) {
-                        return const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(16.0),
-                            child: SakuraLoader(size: 28),
-                          ),
-                        );
+          final width = MediaQuery.of(context).size.width;
+          final gridPreset =
+              SettingsProvider.maybeOf(context)?.gridSizePreset ??
+                  GridSizePreset.standard;
+          final cols = gridPreset.calcColumns(width, isLandscape: true);
+          final tileCacheWidth = computeGridTileCacheWidth(
+            context,
+            columns: cols,
+          );
+          homeContent = RefreshIndicator(
+            onRefresh: () => fetchImages(clear: true),
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: MasonryGridView.count(
+                controller: _scrollController,
+                crossAxisCount: cols,
+                mainAxisSpacing: 8.0,
+                crossAxisSpacing: 8.0,
+                itemCount: imageList.length,
+                itemBuilder: (context, index) {
+                  if (_hasMoreImages &&
+                      !isLoading &&
+                      index >= imageList.length - 6 &&
+                      _scrollController.hasClients &&
+                      _scrollController.position.pixels > 160) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted && _hasMoreImages && !isLoading) {
+                        fetchImages();
                       }
+                    });
+                  }
 
-                      final item = imageList[index];
-                      final int postId = item['id'] as int? ?? 0;
-                      final isActuallyFavorite =
-                          favoritesNotifier.isFavorite(
-                        item['id']?.toString() ?? '',
-                      );
-                      final hasChildren =
-                          item['has_children'] as bool? ?? false;
-                      final num imgWidth =
-                          item['width'] as num? ?? item['sample_width'] as num? ?? 1;
-                      final num imgHeight =
-                          item['height'] as num? ?? item['sample_height'] as num? ?? 1;
-                      final double aspectRatio =
-                          (imgWidth <= 0 || imgHeight <= 0)
-                              ? 1.0
-                              : imgWidth / imgHeight;
-                      final bool isDownloaded =
-                          _isPostDownloaded(postId);
+                  final item = imageList[index];
+                  final String site =
+                      item['site']?.toString() ?? siteConfig.currentSourceId;
 
-                      return GestureDetector(
-                        onTap: () async {
-                                  if (hasChildren) {
-                                    Navigator.push(
-                                      context,
-                                      SakuraPageRoute(
-                                        builder: (_) =>
-                                            GroupPostsScreen(parentPost: item),
-                                      ),
-                                    );
-                                    return;
-                                  }
-                                  final tag = await Navigator.push<String>(
-                                    context,
-                                    SakuraPageRoute(
-                                      builder: (context) =>
-                                          WindowsFullImageScreen(
-                                        postData: item,
-                                        posts: imageList,
-                                        initialIndex: index,
-                                      ),
-                                    ),
-                                  );
-                          if (tag != null && tag.isNotEmpty && mounted) {
-                            setState(() {
-                              _searchTag = tag;
-                              showFavoritesView = false;
-                              showSearchView = true;
-                            });
-                          }
-                        },
-                        child: Card(
-                          clipBehavior: Clip.antiAlias,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14.0),
-                          ),
-                          elevation: 3,
-                          shadowColor:
-                              Theme.of(context).colorScheme.primary.withAlpha(50),
-                          child: AspectRatio(
-                            aspectRatio: aspectRatio,
-                            child: Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                  Positioned.fill(
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(14.0),
-                                      child: SakuraAnimatedImage(
-                                        imageUrl: item['preview_url']
-                                                as String? ??
-                                            item['sample_url'] as String? ??
-                                            '',
-                                        filterQuality: FilterQuality.medium,
-                                        fit: BoxFit.cover,
-                                      ),
-                                    ),
-                                  ),
-                                if (hasChildren)
-                                  Positioned(
-                                    top: 6,
-                                    left: 6,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 3,
-                                        horizontal: 6,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .secondary
-                                            .withAlpha(180),
-                                        borderRadius:
-                                            BorderRadius.circular(8.0),
-                                      ),
-                                      child: const Text(
-                                        'Group',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                Positioned(
-                                  bottom: 0,
-                                  left: 0,
-                                  right: 0,
-                                  child: Container(
-                                    decoration: const BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: Alignment.bottomCenter,
-                                        end: Alignment.topCenter,
-                                        colors: [
-                                          Colors.black87,
-                                          Colors.transparent,
-                                        ],
-                                      ),
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.end,
-                                      children: [
-                                        IconButton(
-                                          icon: Icon(
-                                            isActuallyFavorite
-                                                ? Icons.favorite
-                                                : Icons.favorite_border,
-                                            color: isActuallyFavorite
-                                                ? Colors.pinkAccent
-                                                : Colors.white,
-                                          ),
-                                          iconSize: 20,
-                                          visualDensity:
-                                              VisualDensity.compact,
-                                          onPressed: () =>
-                                              favoritesNotifier
-                                                  .toggleFavorite(item),
-                                        ),
-                                        IconButton(
-                                          icon: Icon(
-                                            isDownloaded
-                                                ? Icons.download_done
-                                                : Icons.download_outlined,
-                                            color: isDownloaded
-                                                ? Colors.greenAccent
-                                                : Colors.white,
-                                          ),
-                                          iconSize: 20,
-                                          visualDensity:
-                                              VisualDensity.compact,
-                                          tooltip: isDownloaded
-                                              ? 'Downloaded'
-                                              : 'Download',
-                                          onPressed: () async {
-                                            if (_processingDownloads
-                                                .contains(postId)) { return; }
-                                            if (_isPostDownloaded(postId)) {
-                                              _showSnackbar(
-                                                  'Already downloaded');
-                                              return;
-                                            }
-                                            try {
-                                              _processingDownloads
-                                                  .add(postId);
-                                              final result =
-                                                  await downloadNotifier
-                                                      .enqueueDownload(item);
-                                              if (context.mounted) {
-                                                String message;
-                                                switch (result) {
-                                                  case EnqueueResult.success:
-                                                    message =
-                                                        'Added to download queue';
-                                                    break;
-                                                  case EnqueueResult
-                                                        .alreadyDownloaded:
-                                                    message =
-                                                        'Already downloaded';
-                                                    break;
-                                                  case EnqueueResult
-                                                        .alreadyInQueue:
-                                                    message =
-                                                        'Already in queue';
-                                                    break;
-                                                  case EnqueueResult.failed:
-                                                    message =
-                                                        'Download failed';
-                                                    break;
-                                                }
-                                                _showSnackbar(message);
-                                              }
-                                            } finally {
-                                              _processingDownloads
-                                                  .remove(postId);
-                                            }
-                                          },
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
+                  return SakuraPostCard(
+                    item: item,
+                    cacheWidth: tileCacheWidth,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        SakuraPageRoute(
+                          builder: (context) => PostDetailPage(
+                            postData: item,
+                            siteName: site,
                           ),
                         ),
                       );
                     },
-                  ),
-                ),
-              );
-            },
+                  );
+                },
+              ),
+            ),
           );
         }
 
-        return Consumer<SiteConfigProvider>(
-          builder: (context, siteConfig, child) {
-            return Scaffold(
-              appBar: AppBar(
-                title: Text(
-                  showSearchView
-                      ? 'Search'
-                      : showFavoritesView
-                          ? 'Favorites'
-                          : 'SakuraView',
+        return Scaffold(
+          key: _scaffoldKey,
+          endDrawer: const QuickSearchDrawer(),
+          endDrawerEnableOpenDragGesture: true,
+          appBar: AppBar(
+            title: (showSearchView || showFavoritesView)
+                ? Text(showSearchView ? '搜索' : '我的收藏')
+                : null,
+            actions: [
+              IconButton(
+                icon: Icon(
+                  !showSearchView && !showFavoritesView
+                      ? Icons.home
+                      : Icons.home_outlined,
                 ),
-                actions: [
-                  IconButton(
-                    icon: Icon(
-                      !showSearchView && !showFavoritesView
-                          ? Icons.home
-                          : Icons.home_outlined,
-                    ),
-                    tooltip: 'Home',
-                    onPressed: () {
-                      setState(() {
-                        showSearchView = false;
-                        showFavoritesView = false;
-                      });
-                      if (imageList.isEmpty) fetchImages(clear: true);
-                    },
-                  ),
-                  IconButton(
-                    icon: Icon(
-                      showSearchView ? Icons.search : Icons.search_outlined,
-                    ),
-                    tooltip: 'Search',
-                    onPressed: () {
-                      setState(() {
-                        _searchTag = null;
-                        showFavoritesView = false;
-                        showSearchView = true;
-                      });
-                    },
-                  ),
-                  IconButton(
-                    icon: Icon(
-                      showFavoritesView
-                          ? Icons.favorite
-                          : Icons.favorite_outline,
-                    ),
-                    tooltip: 'Favorites',
-                    onPressed: () {
-                      setState(() {
-                        showSearchView = false;
-                        showFavoritesView = true;
-                      });
-                    },
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.download_outlined),
-                    tooltip: 'Downloads',
-                    onPressed: () => Navigator.pushNamed(context, '/downloads'),
-                  ),
-                  PopupMenuButton<ImageSite>(
-                    tooltip: 'Switch Image Site',
-                    onSelected: handleSiteChanged,
-                    itemBuilder: (ctx) => ImageSite.values
-                        .map((s) => PopupMenuItem<ImageSite>(
-                              value: s,
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    s == siteConfig.config.site
-                                        ? Icons.radio_button_checked
-                                        : Icons.radio_button_off,
-                                    size: 18,
-                                    color: Theme.of(context).colorScheme.primary,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(s.displayName),
-                                ],
-                              ),
-                            ))
-                        .toList(),
-                    child: Container(
-                      margin: const EdgeInsets.only(right: 12, left: 4),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .primaryContainer
-                            .withAlpha(180),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.cloud,
-                            size: 15,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onPrimaryContainer,
-                          ),
-                          const SizedBox(width: 5),
-                          Text(
-                            siteConfig.config.site.displayName,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onPrimaryContainer,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                tooltip: '首页',
+                onPressed: () {
+                  setState(() {
+                    showSearchView = false;
+                    showFavoritesView = false;
+                  });
+                  if (imageList.isEmpty) fetchImages(clear: true);
+                },
               ),
-              drawer: AppDrawer(
-                isSafeMode: siteConfig.config.safeMode,
-                onSafeModeChanged: handleSafeModeChanged,
-                onSiteChanged: handleSiteChanged,
-                onHomeTapped: handleHomeTapped,
-                onFavoritesTapped: handleFavoritesTapped,
-                onDownloadsTapped: handleDownloadsTapped,
-                onSettingsTapped: handleSettingsTapped,
-                onSearchTapped: () {
+              IconButton(
+                icon: Icon(
+                  showSearchView ? Icons.search : Icons.search_outlined,
+                ),
+                tooltip: '搜索',
+                onPressed: () {
                   setState(() {
                     showFavoritesView = false;
                     showSearchView = true;
                   });
-                  Navigator.pop(context);
-                },
-                onHistoryTapped: () {
-                  Navigator.pop(context);
-                },
-                onFollowTapped: () {
-                  Navigator.pop(context);
-                },
-                onRankingTapped: () {
-                  Navigator.pop(context);
                 },
               ),
-              body: bodyContent,
-            );
-          },
+              IconButton(
+                icon: Icon(
+                  showFavoritesView
+                      ? Icons.favorite
+                      : Icons.favorite_outline,
+                ),
+                tooltip: '收藏',
+                onPressed: () {
+                  setState(() {
+                    showSearchView = false;
+                    showFavoritesView = true;
+                  });
+                },
+              ),
+              IconButton(
+                icon: const Icon(Icons.download_outlined),
+                tooltip: '下载',
+                onPressed: () => Navigator.pushNamed(context, '/downloads'),
+              ),
+              RatingFilterPill(
+                mode: siteConfig.ratingFilter,
+                onSelected: handleRatingFilterChanged,
+                padding: const EdgeInsets.only(right: 6, left: 4),
+              ),
+              PopupMenuButton<String>(
+                tooltip: '切换图站',
+                onSelected: handleSiteChanged,
+                itemBuilder: (ctx) => siteConfig.enabledSources
+                    .map((s) => PopupMenuItem<String>(
+                          value: s.id,
+                          child: Row(
+                            children: [
+                              Icon(
+                                s.id == siteConfig.currentSourceId
+                                    ? Icons.radio_button_checked
+                                    : Icons.radio_button_off,
+                                size: 18,
+                                color: cs.primary,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(s.name),
+                            ],
+                          ),
+                        ))
+                    .toList(),
+                child: Container(
+                  margin: const EdgeInsets.only(right: 12, left: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest.withAlpha(200),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: cs.outlineVariant.withAlpha(140),
+                      width: 0.8,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.public_rounded,
+                        size: 15,
+                        color: cs.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        siteConfig.currentSource.name,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: cs.onSurface,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          drawer: AppDrawer(
+            isSafeMode: siteConfig.safeMode,
+            onSafeModeChanged: handleSafeModeChanged,
+            ratingFilter: siteConfig.ratingFilter,
+            onRatingFilterChanged: handleRatingFilterChanged,
+            onSiteChanged: handleSiteChanged,
+            onHomeTapped: handleHomeTapped,
+            onFavoritesTapped: handleFavoritesTapped,
+            onDownloadsTapped: handleDownloadsTapped,
+            onSettingsTapped: handleSettingsTapped,
+            activeIndex: showFavoritesView ? 2 : (showSearchView ? 1 : 0),
+            onSearchTapped: () {
+              setState(() {
+                showFavoritesView = false;
+                showSearchView = true;
+              });
+            },
+            onHistoryTapped: () {
+              Navigator.push(
+                context,
+                SakuraPageRoute(builder: (_) => const HistoryPage()),
+              );
+            },
+            onBlacklistTapped: () {
+              Navigator.push(
+                context,
+                SakuraPageRoute(builder: (_) => const BlacklistPage()),
+              );
+            },
+            onSiteAccountsTapped: () {
+              Navigator.push(
+                context,
+                SakuraPageRoute(builder: (_) => const SiteAccountsPage()),
+              );
+            },
+            onAboutTapped: () {
+              Navigator.push(
+                context,
+                SakuraPageRoute(builder: (_) => const AboutPage()),
+              );
+            },
+          ),
+          body: IndexedStack(
+            index: showFavoritesView ? 2 : (showSearchView ? 1 : 0),
+            children: [
+              HeroMode(
+                enabled: !showFavoritesView && !showSearchView,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onHorizontalDragStart: (details) {
+                    _swipeStartX = details.globalPosition.dx;
+                    _swipeDeltaX = 0.0;
+                  },
+                  onHorizontalDragUpdate: (details) {
+                    if (_swipeStartX == null) return;
+                    _swipeDeltaX += details.primaryDelta ?? 0.0;
+                  },
+                  onHorizontalDragCancel: () {
+                    _swipeStartX = null;
+                    _swipeDeltaX = 0.0;
+                  },
+                  onHorizontalDragEnd: (details) {
+                    final startX = _swipeStartX;
+                    final deltaX = _swipeDeltaX;
+                    _swipeStartX = null;
+                    _swipeDeltaX = 0.0;
+                    if (startX == null) return;
+                    final screenWidth = MediaQuery.of(context).size.width;
+                    final vx = details.velocity.pixelsPerSecond.dx;
+                    if (startX >= screenWidth * 0.5 &&
+                        (deltaX <= -42 || vx <= -320)) {
+                      _scaffoldKey.currentState?.openEndDrawer();
+                    }
+                  },
+                  child: homeContent,
+                ),
+              ),
+              HeroMode(
+                enabled: !showFavoritesView && showSearchView,
+                child: const SearchPage(),
+              ),
+              HeroMode(
+                enabled: showFavoritesView,
+                child: Consumer<FavoritesNotifier>(
+                  builder: (context, favoritesNotifier, _) =>
+                      FavoriteDisplayWidget(
+                    favoriteItems: favoritesNotifier.favoriteItems,
+                  ),
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -625,6 +547,7 @@ class FavoriteDisplayWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     if (favoriteItems.isEmpty) {
       return Center(
         child: Column(
@@ -633,7 +556,7 @@ class FavoriteDisplayWidget extends StatelessWidget {
             Icon(Icons.favorite_outline, size: 64, color: Colors.grey[300]),
             const SizedBox(height: 16),
             Text(
-              'No favorites yet',
+              '暂无收藏作品',
               style: TextStyle(color: Colors.grey[500], fontSize: 16),
             ),
           ],
@@ -650,61 +573,50 @@ class FavoriteDisplayWidget extends StatelessWidget {
         itemCount: favoriteItems.length,
         itemBuilder: (context, index) {
           final item = favoriteItems[index];
-          final String imageUrl = item['sample_url'] as String? ??
-              item['preview_url'] as String? ??
+          final String imageUrl = item['preview_url'] as String? ??
+              item['sample_url'] as String? ??
               '';
-          final num imgWidth = item['width'] as num? ??
+          final String site = item['site']?.toString() ?? 'yandere';
+          final num imgWidth = item['preview_width'] as num? ??
+              item['width'] as num? ??
               item['sample_width'] as num? ??
               1;
-          final num imgHeight = item['height'] as num? ??
+          final num imgHeight = item['preview_height'] as num? ??
+              item['height'] as num? ??
               item['sample_height'] as num? ??
               1;
           final double aspectRatio = (imgWidth <= 0 || imgHeight <= 0)
               ? 1.0
-              : imgWidth / imgHeight;
+              : (imgWidth / imgHeight).clamp(0.42, 2.4);
 
-          return Card(
-            clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14.0),
+          return Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12.0),
+              border: Border.all(
+                color: cs.outlineVariant.withAlpha(90),
+                width: 0.8,
+              ),
             ),
+            clipBehavior: Clip.antiAlias,
             child: InkWell(
-              onTap: () async {
-                final hasChildren =
-                    item['has_children'] as bool? ?? false;
-                if (hasChildren) {
-                  Navigator.push(
-                    context,
-                    SakuraPageRoute(
-                      builder: (_) => GroupPostsScreen(parentPost: item),
-                    ),
-                  );
-                  return;
-                }
-                final tag = await Navigator.push<String>(
+              onTap: () {
+                Navigator.push(
                   context,
                   SakuraPageRoute(
-                    builder: (context) =>
-                        WindowsFullImageScreen(
-                          postData: item,
-                          posts: favoriteItems,
-                          initialIndex: index,
-                        ),
+                    builder: (_) => PostDetailPage(
+                      postData: item,
+                      siteName: site,
+                    ),
                   ),
                 );
-                if (tag != null && tag.isNotEmpty) {
-                  onTagSelected?.call(tag);
-                }
               },
               child: AspectRatio(
                 aspectRatio: aspectRatio,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14.0),
-                  child: SakuraAnimatedImage(
-                    imageUrl: imageUrl,
-                    filterQuality: FilterQuality.medium,
-                    fit: BoxFit.cover,
-                  ),
+                child: SakuraAnimatedImage(
+                  imageUrl: imageUrl,
+                  siteId: site,
+                  filterQuality: FilterQuality.medium,
+                  fit: BoxFit.cover,
                 ),
               ),
             ),

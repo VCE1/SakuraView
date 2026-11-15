@@ -28,30 +28,30 @@ enum DownloadStoragePreset {
   String get title {
     switch (this) {
       case DownloadStoragePreset.publicPictures:
-        return '公开相册目录 (Pictures/SakuraView)';
+        return '系统相册 (Pictures)';
       case DownloadStoragePreset.publicDownloads:
-        return '公开下载目录 (Download/SakuraView)';
+        return '下载目录 (Download)';
       case DownloadStoragePreset.publicDcim:
-        return '系统相机相册 (DCIM/SakuraView)';
+        return '相机相册 (DCIM)';
       case DownloadStoragePreset.appPrivate:
-        return '应用私有目录 (App Private Storage)';
+        return '应用私有目录';
       case DownloadStoragePreset.custom:
-        return '自定义文件夹 (Custom Directory)';
+        return '自定义目录';
     }
   }
 
   String get subtitle {
     switch (this) {
       case DownloadStoragePreset.publicPictures:
-        return '保存在系统公开 Pictures 相册中，系统图库与其他应用可直接浏览';
+        return '系统图库可见';
       case DownloadStoragePreset.publicDownloads:
-        return '保存在系统公开 Download 下载目录中，便于通过文件管理器统一管理';
+        return '公共下载文件夹';
       case DownloadStoragePreset.publicDcim:
-        return '保存在系统 DCIM 相册目录中，兼容云相册自动备份';
+        return 'DCIM 相册目录';
       case DownloadStoragePreset.appPrivate:
-        return '保存在应用沙盒私有目录中，不对外部相册暴露，卸载应用时随应用清理';
+        return '仅应用内部访问';
       case DownloadStoragePreset.custom:
-        return '手动指定任意本地存储路径或外置存储文件夹';
+        return '指定本地存储路径';
     }
   }
 
@@ -75,14 +75,157 @@ enum DownloadStoragePreset {
   }
 }
 
+/// 首页及搜索页卡片尺寸档位。
+enum GridSizePreset {
+  large('大图'),
+  standard('标准'),
+  compact('紧凑');
+
+  final String label;
+  const GridSizePreset(this.label);
+
+  static GridSizePreset fromName(String? raw) {
+    for (final v in GridSizePreset.values) {
+      if (v.name == raw) return v;
+    }
+    return GridSizePreset.standard;
+  }
+
+  /// 根据当前可视宽度与横竖屏方向计算网格列数。
+  int calcColumns(double width, {required bool isLandscape}) {
+    switch (this) {
+      case GridSizePreset.large:
+        return (width / 260.0).floor().clamp(1, 5);
+      case GridSizePreset.standard:
+        return (width / (isLandscape ? 172.0 : 180.0)).floor().clamp(2, 7);
+      case GridSizePreset.compact:
+        return (width / 136.0).floor().clamp(3, 8);
+    }
+  }
+}
+
+/// 首页底部悬浮导航栏显示策略。
+enum FloatingNavMode {
+  auto('自动显隐'),
+  always('常驻显示'),
+  hidden('永久隐藏');
+
+  final String label;
+  const FloatingNavMode(this.label);
+
+  static FloatingNavMode fromName(String? raw) {
+    for (final v in FloatingNavMode.values) {
+      if (v.name == raw) return v;
+    }
+    return FloatingNavMode.auto;
+  }
+}
+
+/// 下载默认画质偏好（默认下载原图，也可在设置中切换为中等清晰度大图）。
+enum DownloadQuality {
+  original('原图', '下载无压缩原始文件（默认）'),
+  sample('中等尺寸', '下载压缩后的预览图');
+
+  final String title;
+  final String subtitle;
+
+  const DownloadQuality(this.title, this.subtitle);
+
+  static DownloadQuality fromName(String? raw) {
+    for (final v in DownloadQuality.values) {
+      if (v.name == raw) return v;
+    }
+    return DownloadQuality.original;
+  }
+}
+
 class SettingsService {
   static final Logger _logger = Logger('SettingsService');
+  static final Set<String> _verifiedWritableDirs = <String>{};
   static const String _downloadPathKey = 'download_path';
   static const String _downloadPresetKey = 'download_storage_preset';
   static const String _safeModeKey = 'safe_mode_enabled';
+  static const String _downloadQualityKey = 'download_quality_preference';
+  static const String _showGroupBadgeKey = 'show_group_badge';
+  static const String _showR18BadgeKey = 'show_r18_badge';
+  static const String _preloadImagesKey = 'preload_images_enabled';
+  static const String _viewOriginalByDefaultKey = 'view_original_by_default';
+  static const String _gridSizePresetKey = 'grid_size_preset';
+  static const String _floatingNavModeKey = 'floating_nav_mode';
 
   Future<SharedPreferences> _getPrefs() async {
     return SharedPreferences.getInstance();
+  }
+
+  Future<bool> getShowGroupBadge() async {
+    final prefs = await _getPrefs();
+    return prefs.getBool(_showGroupBadgeKey) ?? true;
+  }
+
+  Future<void> setShowGroupBadge(bool enabled) async {
+    final prefs = await _getPrefs();
+    await prefs.setBool(_showGroupBadgeKey, enabled);
+  }
+
+  Future<bool> getShowR18Badge() async {
+    final prefs = await _getPrefs();
+    return prefs.getBool(_showR18BadgeKey) ?? true;
+  }
+
+  Future<void> setShowR18Badge(bool enabled) async {
+    final prefs = await _getPrefs();
+    await prefs.setBool(_showR18BadgeKey, enabled);
+  }
+
+  Future<bool> getPreloadImages() async {
+    final prefs = await _getPrefs();
+    return prefs.getBool(_preloadImagesKey) ?? true;
+  }
+
+  Future<void> setPreloadImages(bool enabled) async {
+    final prefs = await _getPrefs();
+    await prefs.setBool(_preloadImagesKey, enabled);
+  }
+
+  Future<bool> getViewOriginalByDefault() async {
+    final prefs = await _getPrefs();
+    return prefs.getBool(_viewOriginalByDefaultKey) ?? false;
+  }
+
+  Future<void> setViewOriginalByDefault(bool enabled) async {
+    final prefs = await _getPrefs();
+    await prefs.setBool(_viewOriginalByDefaultKey, enabled);
+  }
+
+  Future<GridSizePreset> getGridSizePreset() async {
+    final prefs = await _getPrefs();
+    return GridSizePreset.fromName(prefs.getString(_gridSizePresetKey));
+  }
+
+  Future<void> setGridSizePreset(GridSizePreset preset) async {
+    final prefs = await _getPrefs();
+    await prefs.setString(_gridSizePresetKey, preset.name);
+  }
+
+  Future<FloatingNavMode> getFloatingNavMode() async {
+    final prefs = await _getPrefs();
+    return FloatingNavMode.fromName(prefs.getString(_floatingNavModeKey));
+  }
+
+  Future<void> setFloatingNavMode(FloatingNavMode mode) async {
+    final prefs = await _getPrefs();
+    await prefs.setString(_floatingNavModeKey, mode.name);
+  }
+
+  Future<DownloadQuality> getDownloadQuality() async {
+    final prefs = await _getPrefs();
+    return DownloadQuality.fromName(prefs.getString(_downloadQualityKey));
+  }
+
+  Future<void> setDownloadQuality(DownloadQuality quality) async {
+    final prefs = await _getPrefs();
+    await prefs.setString(_downloadQualityKey, quality.name);
+    _logger.info('Download quality set to: ${quality.name}');
   }
 
   Future<void> setSafeMode(bool isEnabled) async {
@@ -198,6 +341,29 @@ class SettingsService {
       }
     }
 
+    if (Platform.isIOS) {
+      switch (preset) {
+        case DownloadStoragePreset.publicPictures:
+        case DownloadStoragePreset.publicDownloads:
+        case DownloadStoragePreset.publicDcim:
+          final docDir = await getApplicationDocumentsDirectory();
+          return _ensureDirectoryWithFallback(p.join(docDir.path, 'SakuraView'));
+        case DownloadStoragePreset.appPrivate:
+          final supportDir = await getApplicationSupportDirectory();
+          return _ensureDirectoryWithFallback(
+            p.join(supportDir.path, 'SakuraView_Private'),
+          );
+        case DownloadStoragePreset.custom:
+          final prefs = await _getPrefs();
+          final saved = prefs.getString(_downloadPathKey);
+          if (saved != null && saved.trim().isNotEmpty) {
+            return _ensureDirectoryWithFallback(saved.trim());
+          }
+          final docDir = await getApplicationDocumentsDirectory();
+          return _ensureDirectoryWithFallback(p.join(docDir.path, 'SakuraView'));
+      }
+    }
+
     // Desktop (Windows / macOS / Linux)
     switch (preset) {
       case DownloadStoragePreset.publicPictures:
@@ -225,16 +391,58 @@ class SettingsService {
     }
   }
 
+  /// Ensures [desiredPath] exists and supports real file creation, falling back to app storage if blocked.
+  Future<String> ensureWritableDirectory(String desiredPath) {
+    return _ensureDirectoryWithFallback(desiredPath);
+  }
+
+  /// Drops cached write-probe status so a directory will be re-checked after permission changes.
+  static void invalidateWritableCache([String? path]) {
+    if (path == null) {
+      _verifiedWritableDirs.clear();
+    } else {
+      _verifiedWritableDirs.remove(path);
+    }
+  }
+
+  Future<bool> _probeWritable(Directory dir) async {
+    final probe = File(p.join(dir.path, '.sakuraview_probe.jpg'));
+    try {
+      await probe.writeAsBytes(const <int>[0], flush: true);
+      if (await probe.exists()) {
+        await probe.delete();
+      }
+      return true;
+    } catch (_) {
+      try {
+        if (await probe.exists()) {
+          await probe.delete();
+        }
+      } catch (_) {}
+      return false;
+    }
+  }
+
   Future<String> _ensureDirectoryWithFallback(String desiredPath) async {
     try {
       final dir = Directory(desiredPath);
+      if (_verifiedWritableDirs.contains(dir.path) && await dir.exists()) {
+        return dir.path;
+      }
       if (!await dir.exists()) {
         await dir.create(recursive: true);
       }
-      return dir.path;
+      if (await _probeWritable(dir)) {
+        _verifiedWritableDirs.add(dir.path);
+        return dir.path;
+      }
+      throw FileSystemException(
+        'Directory exists but is not writable under storage sandbox',
+        dir.path,
+      );
     } catch (e) {
       _logger.warning(
-        'Could not create directory "$desiredPath" ($e), falling back to app private storage.',
+        'Directory "$desiredPath" unavailable/not writable ($e), falling back to app private storage.',
       );
       final fallbackBase = Platform.isAndroid
           ? (await getExternalStorageDirectory() ??
@@ -248,6 +456,7 @@ class SettingsService {
           await fallbackDir.create(recursive: true);
         } catch (_) {}
       }
+      _verifiedWritableDirs.add(fallbackDir.path);
       return fallbackDir.path;
     }
   }

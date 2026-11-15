@@ -1,22 +1,30 @@
-import 'dart:io';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:provider/provider.dart';
-import 'package:logging/logging.dart';
 
-import 'package:vce1_sakuraview/providers/site_config_provider.dart';
+import 'package:vce1_sakuraview/core/sources/source_models.dart';
 import 'package:vce1_sakuraview/providers/recent_tags_notifier.dart';
-import 'package:vce1_sakuraview/widgets/android/android_full_image_screen.dart';
-import 'package:vce1_sakuraview/widgets/windows/window_full_image_screen.dart';
-import 'package:vce1_sakuraview/widgets/common/group_posts_screen.dart';
-import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
-import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
+import 'package:vce1_sakuraview/providers/site_config_provider.dart';
+import 'package:vce1_sakuraview/services/blacklist_service.dart';
+import 'package:vce1_sakuraview/services/followed_tags_service.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
+import 'package:vce1_sakuraview/widgets/common/search_results_page.dart';
+import 'package:vce1_sakuraview/widgets/common/tag_action_sheet.dart';
 
+/// 搜索主入口页：负责标签联想补全、多条件高级筛选、最近历史与快速搜索预设。
+///
+/// 提交检索或点击历史标签时会以独立路由压入 [SearchResultsPage]，从而保证
+/// 任意层级返回时必然先回到本搜索页（且输入法保持收起），绝不直接跳回主页。
 class SearchPage extends StatefulWidget {
   final String? initialTag;
+  final String? initialQuery;
 
-  const SearchPage({super.key, this.initialTag});
+  const SearchPage({
+    super.key,
+    this.initialTag,
+    this.initialQuery,
+  });
 
   @override
   State<SearchPage> createState() => _SearchPageState();
@@ -24,278 +32,503 @@ class SearchPage extends StatefulWidget {
 
 class _SearchPageState extends State<SearchPage> {
   final TextEditingController _searchController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
-  final Logger _logger = Logger('SearchPage');
+  final TextEditingController _uploaderController = TextEditingController();
+  final TextEditingController _artistController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  final FocusNode _uploaderFocusNode = FocusNode();
+  final FocusNode _artistFocusNode = FocusNode();
 
-  final List<Map<String, dynamic>> _results = [];
-  bool _isLoading = false;
-  bool _hasSearched = false;
-  bool _hasMore = true;
-  int _currentPage = 1;
-  static const int _perPage = 40;
+  List<TagSuggestion> _suggestions = const [];
+  Timer? _suggestDebounce;
+  bool _isSuggestLoading = false;
+  bool _showFilters = false;
+  String? _selectedSort;
+
+  // 若旧调用方以 `SearchPage(initialQuery: ...)` 直接传入初始词，保留内嵌结果视图兼容
+  String? _inlineQuery;
+  String _inlineUploader = '';
+  String _inlineArtist = '';
+  String? _inlineSort;
 
   @override
   void initState() {
     super.initState();
-    _applyTag(widget.initialTag);
+    final incoming = (widget.initialQuery ?? widget.initialTag)?.trim();
+    if (incoming != null && incoming.isNotEmpty) {
+      _searchController.text = incoming;
+      _inlineQuery = incoming;
+    }
   }
 
   @override
   void didUpdateWidget(SearchPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.initialTag != null &&
-        widget.initialTag != oldWidget.initialTag) {
-      _applyTag(widget.initialTag);
+    final incoming = (widget.initialQuery ?? widget.initialTag)?.trim();
+    final previous = (oldWidget.initialQuery ?? oldWidget.initialTag)?.trim();
+    if (incoming != null && incoming != previous && incoming.isNotEmpty) {
+      _searchController.text = incoming;
+      setState(() {
+        _inlineQuery = incoming;
+        _suggestions = const [];
+      });
     }
   }
 
-  void _applyTag(String? tag) {
-    if (tag != null && tag.isNotEmpty) {
-      _searchController.text = tag;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _search(clear: true);
-      });
-    }
+  void _unfocusAll() {
+    _searchFocusNode.unfocus();
+    _uploaderFocusNode.unfocus();
+    _artistFocusNode.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   @override
   void dispose() {
+    _suggestDebounce?.cancel();
     _searchController.dispose();
-    _scrollController.dispose();
+    _uploaderController.dispose();
+    _artistController.dispose();
+    _searchFocusNode.dispose();
+    _uploaderFocusNode.dispose();
+    _artistFocusNode.dispose();
     super.dispose();
   }
 
-  Future<void> _search({bool clear = false}) async {
-    final query = _searchController.text.trim();
-    if (query.isEmpty) return;
+  String _currentEditingToken(String text) {
+    final trimmedLeft = text.trimLeft();
+    if (trimmedLeft.isEmpty || text.endsWith(' ')) return '';
+    final parts = text.split(RegExp(r'\s+'));
+    return parts.isNotEmpty ? parts.last.trim() : '';
+  }
 
-    context.read<RecentTagsNotifier>().addTag(query);
-
-    if (clear) {
-      setState(() {
-        _results.clear();
-        _currentPage = 1;
-        _hasMore = true;
-      });
+  void _onQueryChanged(String value) {
+    setState(() {});
+    _suggestDebounce?.cancel();
+    final token = _currentEditingToken(value);
+    if (token.isEmpty) {
+      if (_suggestions.isNotEmpty) {
+        setState(() {
+          _suggestions = const [];
+          _isSuggestLoading = false;
+        });
+      }
+      return;
     }
-    if (_isLoading || !mounted) return;
 
-    setState(() => _isLoading = true);
+    final siteConfig = context.read<SiteConfigProvider>();
+    if (!siteConfig.currentSource.capabilities.supportsTagAutocomplete) {
+      return;
+    }
 
-    try {
-      final siteConfig = Provider.of<SiteConfigProvider>(context, listen: false);
-      final apiClient = siteConfig.apiClient;
-
-      final fetchedPosts = await apiClient.searchPosts(
-        tags: query,
-        page: _currentPage,
-        limit: _perPage,
-        safeMode: siteConfig.config.safeMode,
-      );
-
+    _suggestDebounce = Timer(const Duration(milliseconds: 280), () async {
       if (!mounted) return;
-      setState(() {
-        if (fetchedPosts.isEmpty) {
-          _hasMore = false;
-        } else {
-          _hasMore = true;
-          _results.addAll(fetchedPosts.map((p) => p.toApiMap()));
-          _currentPage++;
+      setState(() => _isSuggestLoading = true);
+      try {
+        final suggestions = await siteConfig.apiClient.suggestTags(token);
+        if (!mounted) return;
+        if (_currentEditingToken(_searchController.text) == token) {
+          setState(() {
+            _suggestions = suggestions;
+            _isSuggestLoading = false;
+          });
         }
-        _isLoading = false;
-        _hasSearched = true;
+      } catch (_) {
+        if (mounted) setState(() => _isSuggestLoading = false);
+      }
+    });
+  }
+
+  void _acceptSuggestion(TagSuggestion suggestion) {
+    final text = _searchController.text;
+    final lastSpace = text.lastIndexOf(RegExp(r'\s'));
+    final prefix = lastSpace >= 0 ? text.substring(0, lastSpace + 1) : '';
+    final nextText = '$prefix${suggestion.value} ';
+    _searchController.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
+    );
+    setState(() => _suggestions = const []);
+  }
+
+  Future<void> _submitSearch({
+    String? overrideQuery,
+    String? overrideUploader,
+    String? overrideArtist,
+    String? overrideSort,
+  }) async {
+    final query = (overrideQuery ?? _searchController.text).trim();
+    final uploader = (overrideUploader ?? _uploaderController.text).trim();
+    final artist = (overrideArtist ?? _artistController.text).trim();
+    final sort = overrideSort ?? _selectedSort;
+    if (query.isEmpty && uploader.isEmpty && artist.isEmpty) return;
+
+    _unfocusAll();
+    if (_suggestions.isNotEmpty) {
+      setState(() => _suggestions = const []);
+    }
+
+    if (query.isNotEmpty) {
+      _searchController.text = query;
+      await context.read<RecentTagsNotifier>().addTag(query);
+    }
+
+    if (!mounted) return;
+
+    if (widget.initialQuery != null || widget.initialTag != null) {
+      setState(() {
+        _inlineQuery = query;
+        _inlineUploader = uploader;
+        _inlineArtist = artist;
+        _inlineSort = sort;
       });
-    } catch (e) {
-      _logger.severe('Search error: $e');
-      if (!mounted) return;
-      setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Search error: ${e.toString()}')),
-      );
+      return;
+    }
+
+    await Navigator.of(context).push(
+      SakuraPageRoute(
+        builder: (_) => SearchResultsPage(
+          query: query,
+          uploader: uploader,
+          artist: artist,
+          sort: sort,
+        ),
+      ),
+    );
+    if (mounted) {
+      _unfocusAll();
+    }
+  }
+
+  String _categoryLabel(String cat) {
+    switch (cat) {
+      case 'artist':
+        return '画师';
+      case 'character':
+        return '角色';
+      case 'copyright':
+        return '原作';
+      case 'meta':
+        return '元标签';
+      default:
+        return '标签';
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final cs = theme.colorScheme;
     final isLandscape =
         MediaQuery.of(context).orientation == Orientation.landscape;
+    final siteConfig = context.watch<SiteConfigProvider>();
+    final caps = siteConfig.currentSource.capabilities;
+    final hasActiveFilters = _uploaderController.text.trim().isNotEmpty ||
+        _artistController.text.trim().isNotEmpty ||
+        (_selectedSort != null && _selectedSort!.isNotEmpty);
 
-    return Column(
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(
-            16,
-            isLandscape ? 4 : 8,
-            16,
-            isLandscape ? 4 : 8,
-          ),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 680),
-              child: SizedBox(
-                height: isLandscape ? 42 : 48,
-                child: TextField(
-                  controller: _searchController,
-                  style: TextStyle(fontSize: isLandscape ? 13.5 : 14.5),
-                  decoration: InputDecoration(
-                    hintText: 'Search tags...',
-                    prefixIcon: const Icon(Icons.search, size: 20),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 0,
+    return Material(
+      type: MaterialType.transparency,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+      onTap: () {
+        if (_suggestions.isNotEmpty) {
+          setState(() => _suggestions = const []);
+        }
+        _unfocusAll();
+      },
+      child: Column(
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              isLandscape ? 4 : 8,
+              16,
+              isLandscape ? 4 : 6,
+            ),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 720),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SizedBox(
+                            height: isLandscape ? 42 : 46,
+                            child: TextField(
+                              controller: _searchController,
+                              focusNode: _searchFocusNode,
+                              style: TextStyle(fontSize: isLandscape ? 13.5 : 14.5),
+                              decoration: InputDecoration(
+                                hintText: '搜索标签（输入自动联想）',
+                                prefixIcon: const Icon(Icons.search, size: 20),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 0,
+                                ),
+                                suffixIcon: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (_isSuggestLoading)
+                                      const Padding(
+                                        padding: EdgeInsets.only(right: 6),
+                                        child: SizedBox(
+                                          width: 14,
+                                          height: 14,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 1.8,
+                                          ),
+                                        ),
+                                      ),
+                                    if (_searchController.text.isNotEmpty)
+                                      IconButton(
+                                        icon: const Icon(Icons.clear, size: 18),
+                                        onPressed: () {
+                                          _searchController.clear();
+                                          setState(() {
+                                            _suggestions = const [];
+                                            _inlineQuery = null;
+                                          });
+                                        },
+                                      ),
+                                  ],
+                                ),
+                                filled: true,
+                                fillColor: cs.surfaceContainerHighest
+                                    .withValues(alpha: 0.6),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                  borderSide: BorderSide.none,
+                                ),
+                              ),
+                              textInputAction: TextInputAction.search,
+                              onChanged: _onQueryChanged,
+                              onSubmitted: (_) => _submitSearch(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton.tonal(
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 11,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                          ),
+                          onPressed: _submitSearch,
+                          child: const Text('搜索'),
+                        ),
+                        const SizedBox(width: 6),
+                        IconButton.filledTonal(
+                          tooltip: '高级筛选',
+                          style: IconButton.styleFrom(
+                            backgroundColor: (_showFilters || hasActiveFilters)
+                                ? cs.primaryContainer
+                                : cs.surfaceContainerHighest.withValues(alpha: 0.65),
+                            foregroundColor: (_showFilters || hasActiveFilters)
+                                ? cs.onPrimaryContainer
+                                : cs.onSurface,
+                          ),
+                          icon: Icon(
+                            hasActiveFilters
+                                ? Icons.filter_alt_rounded
+                                : Icons.tune_rounded,
+                            size: 20,
+                          ),
+                          onPressed: () {
+                            setState(() => _showFilters = !_showFilters);
+                          },
+                        ),
+                      ],
                     ),
-                    suffixIcon: _searchController.text.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear, size: 18),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() {
-                                _results.clear();
-                                _hasSearched = false;
-                              });
-                            },
-                          )
-                        : null,
-                    filled: true,
-                    fillColor: theme.colorScheme.surface.withAlpha(200),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
-                  textInputAction: TextInputAction.search,
-                  onChanged: (_) => setState(() {}),
-                  onSubmitted: (_) => _search(clear: true),
+                    if (_showFilters) ...[
+                      const SizedBox(height: 8),
+                      _buildFilterPanel(context, caps),
+                    ],
+                    if (_suggestions.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      _buildSuggestionsPanel(context),
+                    ],
+                  ],
                 ),
               ),
             ),
           ),
-        ),
-        Expanded(
-          child: _buildResults(theme),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildResults(ThemeData theme) {
-    if (_isLoading && _results.isEmpty) {
-      return const SakuraGridShimmer();
-    }
-
-    if (_hasSearched && _results.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.search_off, size: 64, color: Colors.grey[400]),
-            const SizedBox(height: 12),
-            Text(
-              'No results found',
-              style: TextStyle(color: Colors.grey[500], fontSize: 16),
+          Expanded(
+            child: _inlineQuery != null && _inlineQuery!.isNotEmpty
+                ? SearchResultsView(
+                    query: _inlineQuery!,
+                    uploader: _inlineUploader,
+                    artist: _inlineArtist,
+                    sort: _inlineSort,
+                    bottomPadding: 86,
+                  )
+                  : _buildSearchHub(theme),
             ),
           ],
         ),
-      );
-    }
+      ),
+    );
+  }
 
-    if (_results.isEmpty) {
-      return _buildRecentTags(theme);
-    }
-
-    final width = MediaQuery.of(context).size.width;
-    final columns = (width / 168).floor().clamp(2, 7);
-
-    return NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        if (notification is ScrollEndNotification &&
-            _scrollController.position.pixels >=
-                _scrollController.position.maxScrollExtent - 200 &&
-            _hasMore &&
-            !_isLoading) {
-          _search();
-        }
-        return false;
-      },
-      child: RefreshIndicator(
-        onRefresh: () => _search(clear: true),
-        child: MasonryGridView.count(
-          controller: _scrollController,
-          padding: const EdgeInsets.fromLTRB(8, 6, 8, 86),
-          crossAxisCount: columns,
-          mainAxisSpacing: 8,
-          crossAxisSpacing: 8,
-          itemCount: _results.length + (_hasMore ? 1 : 0),
-          itemBuilder: (context, index) {
-            if (index == _results.length) {
-              return const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(16),
-                  child: SakuraLoader(size: 28),
-                ),
-              );
-            }
-
-            final item = _results[index];
-            final num imgWidth =
-                item['width'] as num? ?? item['sample_width'] as num? ?? 1;
-            final num imgHeight =
-                item['height'] as num? ?? item['sample_height'] as num? ?? 1;
-            final double aspectRatio =
-                (imgWidth <= 0 || imgHeight <= 0) ? 1.0 : imgWidth / imgHeight;
-
-            final hasChildren = item['has_children'] as bool? ?? false;
-            final previewUrl = item['preview_url'] as String? ??
-                item['sample_url'] as String? ??
-                '';
-
-            return GestureDetector(
-              onTap: () async {
-                if (hasChildren) {
-                  Navigator.push(
-                    context,
-                    SakuraPageRoute(
-                      builder: (_) => GroupPostsScreen(parentPost: item),
+  Widget _buildFilterPanel(BuildContext context, SourceCapabilities caps) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _artistController,
+                  focusNode: _artistFocusNode,
+                  enabled: caps.supportsArtistFilter,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: '画师筛选',
+                    hintText: caps.supportsArtistFilter ? '输入画师名' : '当前图源不支持',
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                  );
-                  return;
-                }
-                final tag = await Navigator.push<String>(
-                  context,
-                  SakuraPageRoute(
-                    builder: (context) => Platform.isWindows
-                        ? WindowsFullImageScreen(
-                            postData: item,
-                            posts: _results,
-                            initialIndex: index,
-                          )
-                        : AndroidFullImageScreen(
-                            postData: item,
-                            posts: _results,
-                            initialIndex: index,
-                          ),
                   ),
-                );
-                if (tag != null && tag.isNotEmpty && mounted) {
-                  _applyTag(tag);
-                }
-              },
-              child: Card(
-                clipBehavior: Clip.antiAlias,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                elevation: 2.5,
-                child: AspectRatio(
-                  aspectRatio: aspectRatio,
-                  child: SakuraAnimatedImage(
-                    imageUrl: previewUrl,
-                    fit: BoxFit.cover,
-                    filterQuality: FilterQuality.medium,
-                  ),
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (_) => _submitSearch(),
                 ),
               ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _uploaderController,
+                  focusNode: _uploaderFocusNode,
+                  enabled: caps.supportsUploaderFilter,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: '上传者筛选',
+                    hintText: caps.supportsUploaderFilter ? '输入上传者用户名' : '当前图源不支持',
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (_) => _submitSearch(),
+                ),
+              ),
+            ],
+          ),
+          if (caps.supportsSort && caps.sortOptions.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: caps.sortOptions.map((opt) {
+                  final selected = (_selectedSort ?? '') == opt.value;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text(opt.label, style: const TextStyle(fontSize: 12)),
+                      selected: selected,
+                      visualDensity: VisualDensity.compact,
+                      onSelected: (_) {
+                        setState(() => _selectedSort = opt.value);
+                      },
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+          if (caps.uploaderHint != null || caps.artistHint != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              [
+                if (!caps.supportsUploaderFilter && caps.uploaderHint != null)
+                  caps.uploaderHint!,
+                if (caps.artistHint != null) caps.artistHint!,
+              ].join(' · '),
+              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+            ),
+          ],
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () {
+                  _uploaderController.clear();
+                  _artistController.clear();
+                  setState(() => _selectedSort = null);
+                },
+                child: const Text('重置筛选'),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.tonal(
+                onPressed: _submitSearch,
+                child: const Text('应用并搜索'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSuggestionsPanel(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Material(
+      elevation: 3,
+      color: cs.surfaceContainerHigh,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 230),
+        child: ListView.separated(
+          shrinkWrap: true,
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          itemCount: _suggestions.length,
+          separatorBuilder: (_, __) => const Divider(height: 1),
+          itemBuilder: (context, index) {
+            final item = _suggestions[index];
+            return ListTile(
+              dense: true,
+              visualDensity: VisualDensity.compact,
+              title: Text(
+                item.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13.5),
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _categoryLabel(item.category),
+                    style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                  ),
+                  if (item.postCount != null) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      '${item.postCount}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: cs.outline,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              onTap: () => _acceptSuggestion(item),
             );
           },
         ),
@@ -303,71 +536,220 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  Widget _buildRecentTags(ThemeData theme) {
+  Widget _buildSearchHub(ThemeData theme) {
     final recentTags = context.watch<RecentTagsNotifier>();
-    if (recentTags.tags.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.search, size: 64, color: Colors.grey[300]),
-            const SizedBox(height: 12),
-            Text(
-              'Enter tags to search',
-              style: TextStyle(color: Colors.grey[500], fontSize: 16),
-            ),
-          ],
-        ),
-      );
-    }
+    final presets = recentTags.quickSearches;
+    final tags = recentTags.tags;
+    final cs = theme.colorScheme;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 86),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 680),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        FollowedTagsService.instance,
+        BlacklistService.instance,
+      ]),
+      builder: (context, _) {
+        final followedTags = FollowedTagsService.instance.tags;
+
+        if (presets.isEmpty && tags.isEmpty && followedTags.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.search_rounded, size: 48, color: Colors.grey[400]),
+                const SizedBox(height: 12),
+                Text(
+                  '输入标签或打开筛选查找作品',
+                  style: TextStyle(color: Colors.grey[500], fontSize: 15),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 86),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 680),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Recent Tags',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      color: theme.colorScheme.primary,
+                  if (presets.isNotEmpty) ...[
+                    Row(
+                      children: [
+                        Text(
+                          '快速搜索预设',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: cs.primary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const Spacer(),
+                        TextButton.icon(
+                          icon: const Icon(Icons.bookmarks_outlined, size: 16),
+                          label: const Text('清空预设'),
+                          onPressed: () => recentTags.clearQuickSearches(),
+                        ),
+                      ],
                     ),
-                  ),
-                  const Spacer(),
-                  TextButton.icon(
-                    icon: const Icon(Icons.delete_sweep, size: 18),
-                    label: const Text('Clear'),
-                    onPressed: () => recentTags.clear(),
-                  ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: presets.map((entry) {
+                        return InputChip(
+                          avatar: Icon(
+                            Icons.bookmark_rounded,
+                            size: 16,
+                            color: cs.primary,
+                          ),
+                          label: Text(
+                            entry.label,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                          deleteIcon: const Icon(Icons.close, size: 16),
+                          onDeleted: () => recentTags.removeQuickSearch(entry.id),
+                          onPressed: () => _submitSearch(
+                            overrideQuery: entry.query,
+                            overrideUploader: entry.uploader,
+                            overrideArtist: entry.artist,
+                            overrideSort: entry.sort,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  if (followedTags.isNotEmpty) ...[
+                    Row(
+                      children: [
+                        Text(
+                          '特别关注',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: cs.primary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const Spacer(),
+                        TextButton.icon(
+                          icon: const Icon(Icons.star_outline_rounded, size: 16),
+                          label: const Text('清空关注'),
+                          onPressed: () =>
+                              FollowedTagsService.instance.clearAll(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: followedTags.map((tag) {
+                        return GestureDetector(
+                          onLongPress: () => showTagActionSheet(
+                            context,
+                            tag,
+                            onSearchTag: () =>
+                                _submitSearch(overrideQuery: tag),
+                          ),
+                          onSecondaryTap: () => showTagActionSheet(
+                            context,
+                            tag,
+                            onSearchTag: () =>
+                                _submitSearch(overrideQuery: tag),
+                          ),
+                          child: InputChip(
+                            avatar: Icon(
+                              Icons.star_rounded,
+                              size: 16,
+                              color: cs.primary,
+                            ),
+                            label: Text(
+                              tag.replaceAll('_', ' '),
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                            deleteIcon: const Icon(Icons.close, size: 16),
+                            onDeleted: () =>
+                                FollowedTagsService.instance.removeTag(tag),
+                            onPressed: () => _submitSearch(overrideQuery: tag),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  if (tags.isNotEmpty) ...[
+                    Row(
+                      children: [
+                        Text(
+                          '最近搜索',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: cs.primary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const Spacer(),
+                        TextButton.icon(
+                          icon: const Icon(Icons.delete_sweep, size: 16),
+                          label: const Text('清空'),
+                          onPressed: () => recentTags.clear(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: tags.map((tag) {
+                        final isFollowed =
+                            FollowedTagsService.instance.isFollowed(tag);
+                        return GestureDetector(
+                          onLongPress: () => showTagActionSheet(
+                            context,
+                            tag,
+                            onSearchTag: () =>
+                                _submitSearch(overrideQuery: tag),
+                          ),
+                          onSecondaryTap: () => showTagActionSheet(
+                            context,
+                            tag,
+                            onSearchTag: () =>
+                                _submitSearch(overrideQuery: tag),
+                          ),
+                          child: InputChip(
+                            avatar: isFollowed
+                                ? Icon(
+                                    Icons.star_rounded,
+                                    size: 15,
+                                    color: cs.primary,
+                                  )
+                                : null,
+                            label: Text(
+                              tag,
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                            deleteIcon: const Icon(Icons.close, size: 16),
+                            onDeleted: () => recentTags.removeTag(tag),
+                            onPressed: () => _submitSearch(overrideQuery: tag),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ],
                 ],
               ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: recentTags.tags.map((tag) {
-                  return InputChip(
-                    label: Text(tag, style: const TextStyle(fontSize: 13)),
-                    deleteIcon: const Icon(Icons.close, size: 16),
-                    onDeleted: () => recentTags.removeTag(tag),
-                    onPressed: () {
-                      _searchController.text = tag;
-                      _search(clear: true);
-                    },
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                  );
-                }).toList(),
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

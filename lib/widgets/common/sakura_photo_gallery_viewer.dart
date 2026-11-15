@@ -11,13 +11,21 @@ import 'package:photo_view/photo_view_gallery.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:vce1_sakuraview/core/utils/post_normalization.dart';
 import 'package:vce1_sakuraview/providers/base_download_notifier.dart';
 import 'package:vce1_sakuraview/providers/favorites_notifier.dart';
+import 'package:vce1_sakuraview/providers/settings_provider.dart';
 import 'package:vce1_sakuraview/providers/site_config_provider.dart';
+import 'package:vce1_sakuraview/services/blacklist_service.dart';
+import 'package:vce1_sakuraview/services/followed_tags_service.dart';
+import 'package:vce1_sakuraview/services/history_service.dart';
+import 'package:vce1_sakuraview/utils/settings_service.dart';
 import 'package:vce1_sakuraview/widgets/common/group_posts_screen.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_animated_image.dart';
-import 'package:vce1_sakuraview/widgets/common/sakura_loader.dart';
 import 'package:vce1_sakuraview/widgets/common/sakura_page_route.dart';
+import 'package:vce1_sakuraview/widgets/common/sakura_video_player.dart';
+import 'package:vce1_sakuraview/widgets/common/share_options_sheet.dart';
+import 'package:vce1_sakuraview/widgets/common/tag_action_sheet.dart';
 
 /// Formatter utilities for post metadata display.
 class ViewerFormatUtils {
@@ -43,43 +51,43 @@ class ViewerFormatUtils {
       final diff = DateTime.now().difference(date);
       if (diff.inDays > 7) return DateFormat('yyyy/MM/dd').format(date);
       if (diff.inDays > 1) return '${diff.inDays}天前';
-      if (diff.inDays == 1) return '昨天';
-      if (diff.inHours > 1) return '${diff.inHours}小时前';
-      if (diff.inHours == 1) return '1小时前';
-      if (diff.inMinutes > 1) return '${diff.inMinutes}分钟前';
+      if (diff.inHours > 0) return '${diff.inHours}小时前';
+      if (diff.inMinutes > 0) return '${diff.inMinutes}分钟前';
       return '刚刚';
     } catch (_) {
       return '';
     }
   }
 
-  static (String label, Color color) parseRating(String? rating) {
-    final r = (rating ?? '').toLowerCase().trim();
-    if (r == 's' || r == 'g' || r == 'safe' || r == 'general') {
-      return ('Safe 全年龄', const Color(0xFF10B981));
+  static (String label, Color color) parseRating(
+    String? rating, {
+    String? siteId,
+  }) {
+    final parsed = ContentRating.parse(rating, siteId: siteId);
+    switch (parsed) {
+      case ContentRating.safe:
+        return ('Safe 全年龄', const Color(0xFF10B981));
+      case ContentRating.sensitive:
+        return ('Sensitive 敏感级', const Color(0xFFF59E0B));
+      case ContentRating.questionable:
+        return ('Questionable 存疑级', const Color(0xFFF59E0B));
+      case ContentRating.explicit:
+        return ('Explicit 限制级', const Color(0xFFEF4444));
+      case ContentRating.unknown:
+        return ('Unknown 未知', const Color(0xFF94A3B8));
     }
-    if (r == 'q' || r == 'sensitive' || r == 'questionable') {
-      return ('Questionable 微敏感', const Color(0xFFF59E0B));
-    }
-    if (r == 'e' || r == 'explicit') {
-      return ('Explicit 限制级', const Color(0xFFEF4444));
-    }
-    return ('Unknown 未知', Colors.grey);
   }
 }
 
-/// A high-performance, mature image gallery viewer inspired by Pixes & Boorusama.
-///
-/// Features:
-/// - Smooth multi-image horizontal swipe gallery with [PhotoViewGallery.builder].
-/// - Side navigation buttons (Chevrons) and mouse wheel support inspired by pixes.
-/// - Progressive original image loading: renders preview/sample immediately (0ms delay),
-///   allows non-blocking background original loading with percentage indicator.
-/// - Fluid gestures: double-tap zoom (1x -> 2.5x -> 1x), pinch zoom, tap to toggle
-///   immersive mode, and pull-down drag-to-dismiss.
-/// - Glassmorphism floating top bar & bottom capsule actions.
-/// - Rich metadata & categorized tags sheet (Artist, Character, Copyright, General).
-/// - Keyboard shortcuts for desktop and tablet productivity.
+enum _ResolutionTier {
+  thumbnail,
+  sample,
+  original,
+}
+
+/// Next-Generation Full-Featured Image Gallery Viewer
+/// High performance, 3-tier progressive loading (Thumbnail -> Sample -> Master Original),
+/// Telegram-style sleek frosted glass status capsule, Hero transitions, zero emojis.
 class SakuraPhotoGalleryViewer extends StatefulWidget {
   final List<Map<String, dynamic>> posts;
   final int initialIndex;
@@ -99,24 +107,28 @@ class SakuraPhotoGalleryViewer extends StatefulWidget {
       _SakuraPhotoGalleryViewerState();
 }
 
-class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
-  static final Logger _log = Logger('GalleryViewer');
+class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer>
+    with SingleTickerProviderStateMixin {
+  static final Logger _log = Logger('SakuraPhotoGalleryViewer');
 
-  late final PageController _pageController;
+  late PageController _pageController;
   late int _currentIndex;
-  final FocusNode _focusNode = FocusNode();
-
   bool _showUI = true;
+  bool _tabletDetailOpen = false;
   double _dragOffsetY = 0.0;
 
-  // Progressive original image state per post index
-  final Map<int, bool> _originalLoaded = {};
+  final Map<int, PhotoViewController> _photoControllers = {};
+  final Map<int, _ResolutionTier> _activeTiers = {};
   final Map<int, bool> _originalLoading = {};
-  final Map<int, double?> _originalProgress = {};
+  final Map<int, bool> _originalFailed = {};
+  final Map<int, String> _resolvedMasterUrls = {};
+
   final Map<int, ImageStream> _imageStreams = {};
   final Map<int, ImageStreamListener> _streamListeners = {};
+  final Map<String, int> _userVotes = {};
+  final Set<String> _votingPostKeys = {};
 
-  final Map<int, PhotoViewController> _photoControllers = {};
+  final FocusNode _focusNode = FocusNode();
 
   @override
   void initState() {
@@ -124,6 +136,52 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
     _currentIndex = widget.initialIndex
         .clamp(0, widget.posts.isEmpty ? 0 : widget.posts.length - 1);
     _pageController = PageController(initialPage: _currentIndex);
+
+    if (widget.posts.isNotEmpty) {
+      final currentPost = widget.posts[_currentIndex];
+      HistoryService.instance.addHistory(currentPost);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _loadPageWithSettings(_currentIndex);
+        }
+      });
+    }
+  }
+
+  Future<void> _loadPageWithSettings(int index) async {
+    if (!mounted || index < 0 || index >= widget.posts.length) return;
+    _loadMediumImage(index);
+    _loadVoteStateIfNeeded(index);
+
+    bool preloadImages = true;
+    bool viewOriginalByDefault = false;
+
+    final settingsProvider =
+        SettingsProvider.maybeOf(context, listen: false);
+    if (settingsProvider != null) {
+      if (!settingsProvider.isLoaded) {
+        await settingsProvider.load();
+      }
+      preloadImages = settingsProvider.preloadImages;
+      viewOriginalByDefault = settingsProvider.viewOriginalByDefault;
+    } else {
+      final service = SettingsService();
+      preloadImages = await service.getPreloadImages();
+      viewOriginalByDefault = await service.getViewOriginalByDefault();
+    }
+
+    if (!mounted) return;
+    if (preloadImages) {
+      if (index + 1 < widget.posts.length) {
+        _loadMediumImage(index + 1);
+      }
+      if (index - 1 >= 0) {
+        _loadMediumImage(index - 1);
+      }
+    }
+    if (viewOriginalByDefault) {
+      _requestOriginalImage(index);
+    }
   }
 
   @override
@@ -153,15 +211,26 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
     return scale > 1.05;
   }
 
-  String _getPreviewUrl(Map<String, dynamic> post) {
+  String _getThumbnailUrl(Map<String, dynamic> post) {
+    if (post['is_local_file'] == true || widget.isLocal) {
+      return (post['local_file_path'] ?? post['localPath'] ?? '') as String;
+    }
+    return (post['thumbnail_url'] ??
+        post['preview_url'] ??
+        post['sample_url'] ??
+        post['file_url'] ??
+        '') as String;
+  }
+
+  String _getSampleUrl(Map<String, dynamic> post) {
     if (post['is_local_file'] == true || widget.isLocal) {
       return (post['local_file_path'] ?? post['localPath'] ?? '') as String;
     }
     return (post['sample_url'] ??
-            post['jpeg_url'] ??
-            post['preview_url'] ??
-            post['file_url'] ??
-            '') as String;
+        post['jpeg_url'] ??
+        post['preview_url'] ??
+        post['file_url'] ??
+        '') as String;
   }
 
   String _getOrigUrl(Map<String, dynamic> post) {
@@ -169,50 +238,108 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
       return (post['local_file_path'] ?? post['localPath'] ?? '') as String;
     }
     return (post['file_url'] ??
-            post['jpeg_url'] ??
-            post['sample_url'] ??
-            post['preview_url'] ??
-            '') as String;
+        post['original_url'] ??
+        post['jpeg_url'] ??
+        post['sample_url'] ??
+        post['preview_url'] ??
+        '') as String;
   }
 
-  bool _hasOriginalAvailable(Map<String, dynamic> post) {
-    final preview = _getPreviewUrl(post);
-    final orig = _getOrigUrl(post);
-    return orig.isNotEmpty && orig != preview;
+  void _resolveUrl(
+    String url, {
+    required VoidCallback onLoaded,
+    VoidCallback? onError,
+  }) {
+    if (url.isEmpty) {
+      onError?.call();
+      return;
+    }
+    try {
+      final provider = createSiteImageProvider(url);
+      final stream = provider.resolve(createLocalImageConfiguration(context));
+      late ImageStreamListener listener;
+      listener = ImageStreamListener(
+        (info, synchronousCall) {
+          stream.removeListener(listener);
+          onLoaded();
+        },
+        onError: (dynamic error, StackTrace? stackTrace) {
+          stream.removeListener(listener);
+          onError?.call();
+        },
+      );
+      stream.addListener(listener);
+    } catch (_) {
+      onError?.call();
+    }
   }
 
-  void _loadOriginal(int index) async {
-    if (_originalLoading[index] == true || _originalLoaded[index] == true) return;
+  /// Fast medium-resolution image loading (Sample / Preview).
+  /// Responsive, low latency, low memory footprint.
+  void _loadMediumImage(int index) async {
     if (index < 0 || index >= widget.posts.length) return;
-
-    final post = widget.posts[index];
-    var origUrl = _getOrigUrl(post);
-    if (origUrl.isEmpty) {
-      _showToast('原图链接不可用');
+    if (_activeTiers[index] == _ResolutionTier.original ||
+        _activeTiers[index] == _ResolutionTier.sample) {
       return;
     }
 
-    final localConfig = createLocalImageConfiguration(context);
+    final post = widget.posts[index];
+    final ext = post['file_ext']?.toString();
+    final origCheck = _getOrigUrl(post);
+    final sampleUrl = _getSampleUrl(post);
 
-    setState(() {
-      _originalLoading[index] = true;
-      _originalProgress[index] = 0.0;
-    });
+    if (SourceUrlResolver.isVideoMedia(url: origCheck, fileExt: ext) ||
+        SourceUrlResolver.isVideoMedia(url: sampleUrl)) {
+      _activeTiers[index] = _ResolutionTier.original;
+      return;
+    }
 
-    // Zerochan detail resolution if URL points to 600 thumbnail
-    if (origUrl.contains('zerochan.net/600/')) {
+    if (SourceUrlResolver.isAnimatedMedia(url: origCheck, fileExt: ext) &&
+        origCheck.isNotEmpty &&
+        !SourceUrlResolver.isAnimatedMedia(url: sampleUrl)) {
+      _requestOriginalImage(index);
+      return;
+    }
+
+    if (post['is_local_file'] == true || widget.isLocal) {
+      _activeTiers[index] = _ResolutionTier.original;
+      return;
+    }
+
+    if (sampleUrl.isEmpty) {
+      _activeTiers[index] = _ResolutionTier.thumbnail;
+      return;
+    }
+
+    // Zerochan detail resolution: upgrade metadata (tags, dims) without auto-downloading master image
+    final site = post['site']?.toString().toLowerCase() ?? '';
+    final origUrl = _getOrigUrl(post);
+    if (site == 'zerochan' || origUrl.contains('zerochan.net')) {
       try {
-        if (mounted) {
-          final apiClient = context.read<SiteConfigProvider>().apiClient;
-          final detail = await apiClient.getPostDetail(post['id'].toString());
-          if (detail != null &&
-              detail.fileUrl != null &&
-              detail.fileUrl!.isNotEmpty &&
-              mounted) {
-            origUrl = detail.fileUrl!;
+        final apiClient = context.read<SiteConfigProvider>().apiClient;
+        final detail = await apiClient.getPostDetail(post['id'].toString());
+        if (detail != null && mounted) {
+          if (detail.fileUrl != null && detail.fileUrl!.isNotEmpty) {
             post['file_url'] = detail.fileUrl;
-            if (detail.fileSize != null) post['file_size'] = detail.fileSize;
-            if (detail.fileExt != null) post['file_ext'] = detail.fileExt;
+            post['original_url'] = detail.fileUrl;
+          }
+          if (detail.sampleUrl != null && detail.sampleUrl!.isNotEmpty) {
+            post['sample_url'] = detail.sampleUrl;
+          }
+          if (detail.width != null && detail.width! > 0) {
+            post['width'] = detail.width;
+          }
+          if (detail.height != null && detail.height! > 0) {
+            post['height'] = detail.height;
+          }
+          if (detail.fileSize != null && detail.fileSize! > 0) {
+            post['file_size'] = detail.fileSize;
+          }
+          if (detail.fileExt != null && detail.fileExt!.isNotEmpty) {
+            post['file_ext'] = detail.fileExt;
+          }
+          if (detail.tags != null && detail.tags!.isNotEmpty) {
+            post['tags'] = detail.tags;
           }
         }
       } catch (e) {
@@ -220,55 +347,196 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
       }
     }
 
-    try {
-      final provider = createSiteImageProvider(origUrl);
-      final stream = provider.resolve(localConfig);
-      _imageStreams[index] = stream;
+    _resolveUrl(
+      sampleUrl,
+      onLoaded: () {
+        if (mounted && _activeTiers[index] != _ResolutionTier.original) {
+          setState(() {
+            _activeTiers[index] = _ResolutionTier.sample;
+          });
+        }
+      },
+    );
+  }
 
-      late ImageStreamListener listener;
-      listener = ImageStreamListener(
-        (ImageInfo info, bool synchronousCall) {
-          if (mounted) {
-            setState(() {
-              _originalLoaded[index] = true;
-              _originalLoading[index] = false;
-              _originalProgress[index] = null;
-            });
-            _showToast('原图载入完成');
-          }
-        },
-        onChunk: (ImageChunkEvent event) {
-          if (mounted &&
-              event.expectedTotalBytes != null &&
-              event.expectedTotalBytes! > 0) {
-            setState(() {
-              _originalProgress[index] = (event.cumulativeBytesLoaded /
-                      event.expectedTotalBytes!)
-                  .clamp(0.0, 1.0);
-            });
-          }
-        },
-        onError: (dynamic error, StackTrace? stackTrace) {
-          if (mounted) {
-            setState(() {
-              _originalLoading[index] = false;
-              _originalProgress[index] = null;
-            });
-            _showToast('原图载入失败');
-          }
-        },
-      );
+  /// On-demand master original image loading triggered exclusively by user tap.
+  /// Zero silent background downloading, zero intrusive toast alerts.
+  void _requestOriginalImage(int index) async {
+    if (index < 0 || index >= widget.posts.length) return;
+    if (_activeTiers[index] == _ResolutionTier.original) return;
+    if (_originalLoading[index] == true) return;
 
-      _streamListeners[index] = listener;
-      stream.addListener(listener);
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _originalLoading[index] = false;
-          _originalProgress[index] = null;
-        });
-        _showToast('原图载入失败: $e');
+    final post = widget.posts[index];
+    final ext = post['file_ext']?.toString();
+    final origCheck = _getOrigUrl(post);
+    final sampleCheck = _getSampleUrl(post);
+    if (SourceUrlResolver.isVideoMedia(url: origCheck, fileExt: ext) ||
+        SourceUrlResolver.isVideoMedia(url: sampleCheck)) {
+      setState(() => _activeTiers[index] = _ResolutionTier.original);
+      return;
+    }
+    if (post['is_local_file'] == true || widget.isLocal) {
+      setState(() => _activeTiers[index] = _ResolutionTier.original);
+      return;
+    }
+
+    var origUrl = _getOrigUrl(post);
+    final site = post['site']?.toString().toLowerCase() ?? '';
+    if (site == 'zerochan' || origUrl.contains('zerochan.net')) {
+      try {
+        final apiClient = context.read<SiteConfigProvider>().apiClient;
+        final detail = await apiClient.getPostDetail(post['id'].toString());
+        if (detail?.fileUrl != null && detail!.fileUrl!.isNotEmpty) {
+          origUrl = detail.fileUrl!;
+          post['file_url'] = detail.fileUrl;
+          post['original_url'] = detail.fileUrl;
+        }
+      } catch (e) {
+        _log.fine('Zerochan original resolve: $e');
       }
+    }
+
+    if (origUrl.isEmpty) {
+      _showToast('未找到原图地址');
+      return;
+    }
+
+    setState(() {
+      _originalLoading[index] = true;
+      _originalFailed[index] = false;
+    });
+
+    _resolvedMasterUrls[index] = origUrl;
+
+    _resolveUrl(
+      origUrl,
+      onLoaded: () {
+        if (mounted) {
+          setState(() {
+            _activeTiers[index] = _ResolutionTier.original;
+            _originalLoading[index] = false;
+            _originalFailed[index] = false;
+          });
+        }
+      },
+      onError: () {
+        if (mounted) {
+          setState(() {
+            _originalLoading[index] = false;
+            _originalFailed[index] = true;
+          });
+          _showToast('原图加载失败，请重试');
+        }
+      },
+    );
+  }
+
+  String _resolvePostSiteId(
+    Map<String, dynamic> post,
+    SiteConfigProvider siteProvider,
+  ) {
+    final explicit =
+        (post['site_id'] ?? post['site'])?.toString().trim() ?? '';
+    return explicit.isNotEmpty ? explicit : siteProvider.currentSourceId;
+  }
+
+  String _voteCacheKey(String siteId, String postId) => '$siteId:$postId';
+
+  Future<void> _loadVoteStateIfNeeded(int index) async {
+    if (!mounted || widget.isLocal) return;
+    if (index < 0 || index >= widget.posts.length) return;
+    final post = widget.posts[index];
+    final postId = post['id']?.toString().trim() ?? '';
+    if (postId.isEmpty) return;
+    final siteProvider = context.read<SiteConfigProvider>();
+    final siteId = _resolvePostSiteId(post, siteProvider);
+    final adapter = siteProvider.adapterFor(siteId);
+    if (!adapter.descriptor.capabilities.supportsVoting ||
+        !adapter.hasWriteCredentials) {
+      return;
+    }
+    final key = _voteCacheKey(siteId, postId);
+    if (_userVotes.containsKey(key)) return;
+    final state = await adapter.fetchPostVoteState(postId);
+    if (!mounted || state == null) return;
+    setState(() {
+      _userVotes[key] = state.userVote;
+      if (state.postScore != null) {
+        post['score'] = state.postScore;
+      }
+    });
+  }
+
+  Future<void> _voteGalleryPost(
+    Map<String, dynamic> post,
+    int targetVote,
+  ) async {
+    final postId = post['id']?.toString().trim() ?? '';
+    if (postId.isEmpty) return;
+    final siteProvider = context.read<SiteConfigProvider>();
+    final siteId = _resolvePostSiteId(post, siteProvider);
+    final adapter = siteProvider.adapterFor(siteId);
+    if (!adapter.descriptor.capabilities.supportsVoting) return;
+
+    final key = _voteCacheKey(siteId, postId);
+    if (_votingPostKeys.contains(key)) return;
+
+    final prevVote = _userVotes[key] ?? 0;
+    final prevScore = post['score'] is int
+        ? post['score'] as int
+        : int.tryParse(post['score']?.toString() ?? '') ?? 0;
+    final nextVote = (prevVote == targetVote) ? 0 : targetVote;
+    final optimisticScore = prevScore - prevVote + nextVote;
+
+    setState(() {
+      _votingPostKeys.add(key);
+      _userVotes[key] = nextVote;
+      post['score'] = optimisticScore;
+    });
+
+    try {
+      final result = nextVote == 0
+          ? await adapter.unvotePost(postId)
+          : await adapter.votePost(postId, nextVote);
+      if (!mounted) return;
+      setState(() {
+        _userVotes[key] = result?.userVote ?? nextVote;
+        if (result?.postScore != null) {
+          post['score'] = result!.postScore;
+        }
+      });
+      _showToast(
+        nextVote == 0
+            ? '已取消评分投票'
+            : (nextVote > 0 ? '已赞同 (+1)' : '已点踩 (-1)'),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _userVotes[key] = prevVote;
+        post['score'] = prevScore;
+      });
+      _showToast(e.toString().replaceFirst('ApiException: ', ''));
+    } finally {
+      if (mounted) {
+        setState(() => _votingPostKeys.remove(key));
+      }
+    }
+  }
+
+  Future<void> _toggleGalleryFavorite(Map<String, dynamic> post) async {
+    final siteProvider = context.read<SiteConfigProvider>();
+    final favNotifier = context.read<FavoritesNotifier>();
+    final siteId = _resolvePostSiteId(post, siteProvider);
+    final adapter = widget.isLocal ? null : siteProvider.adapterFor(siteId);
+    final res = await favNotifier.toggleFavoriteWithCloudSync(
+      post,
+      siteName: siteId.isNotEmpty ? siteId : null,
+      adapter: adapter,
+    );
+    if (!mounted) return;
+    if (res.cloudMessage != null) {
+      _showToast(res.cloudMessage!);
     }
   }
 
@@ -288,12 +556,8 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
   }
 
   void _onTagClicked(String tag) {
-    if (widget.onTagSelected != null) {
-      widget.onTagSelected!(tag);
-      Navigator.of(context).pop(tag);
-    } else {
-      Navigator.of(context).pop(tag);
-    }
+    Navigator.of(context).pop(tag);
+    widget.onTagSelected?.call(tag);
   }
 
   void _openInBrowser(String url) async {
@@ -329,30 +593,43 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
     }
   }
 
-  void _handleKey(KeyEvent event) {
-    if (event is! KeyDownEvent) return;
+  void _handleInfoTap(Map<String, dynamic> post) {
+    final isWide = MediaQuery.of(context).size.width >= 800;
+    if (isWide) {
+      setState(() {
+        _tabletDetailOpen = !_tabletDetailOpen;
+      });
+    } else {
+      _showDetailsModal(post);
+    }
+  }
+
+  KeyEventResult _handleKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.escape) {
       Navigator.of(context).maybePop();
+      return KeyEventResult.handled;
     } else if (key == LogicalKeyboardKey.arrowLeft ||
         key == LogicalKeyboardKey.keyA) {
       _previousPage();
+      return KeyEventResult.handled;
     } else if (key == LogicalKeyboardKey.arrowRight ||
         key == LogicalKeyboardKey.keyD) {
       _nextPage();
-    } else if (key == LogicalKeyboardKey.keyO) {
-      _loadOriginal(_currentIndex);
+      return KeyEventResult.handled;
     } else if (key == LogicalKeyboardKey.keyF) {
       if (widget.posts.isNotEmpty) {
-        context
-            .read<FavoritesNotifier>()
-            .toggleFavorite(widget.posts[_currentIndex]);
+        _toggleGalleryFavorite(widget.posts[_currentIndex]);
       }
+      return KeyEventResult.handled;
     } else if (key == LogicalKeyboardKey.keyI) {
       if (widget.posts.isNotEmpty) {
-        _showDetailsModal(widget.posts[_currentIndex]);
+        _handleInfoTap(widget.posts[_currentIndex]);
       }
+      return KeyEventResult.handled;
     }
+    return KeyEventResult.ignored;
   }
 
   @override
@@ -383,14 +660,195 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
     final dragProgress = (_dragOffsetY / 400).clamp(0.0, 1.0);
     final bgAlpha = (1.0 - dragProgress).clamp(0.0, 1.0);
     final currentScale = (1.0 - (_dragOffsetY / 1200)).clamp(0.78, 1.0);
+    final isWide = MediaQuery.of(context).size.width >= 800;
+
+    final galleryView = Stack(
+      children: [
+        // Pull-down dismiss drag detector
+        GestureDetector(
+          onVerticalDragUpdate: (details) {
+            if (_isCurrentZoomed()) return;
+            setState(() {
+              _dragOffsetY += details.delta.dy;
+              if (_dragOffsetY < 0) _dragOffsetY = 0;
+            });
+          },
+          onVerticalDragEnd: (details) {
+            if (_dragOffsetY > 110 || (details.primaryVelocity ?? 0) > 650) {
+              Navigator.of(context).maybePop();
+            } else {
+              setState(() {
+                _dragOffsetY = 0.0;
+              });
+            }
+          },
+          child: Transform.translate(
+            offset: Offset(0, _dragOffsetY),
+            child: Transform.scale(
+              scale: currentScale,
+              child: PhotoViewGallery.builder(
+                pageController: _pageController,
+                scrollPhysics: widget.posts.length <= 1
+                    ? const NeverScrollableScrollPhysics()
+                    : const BouncingScrollPhysics(),
+                itemCount: widget.posts.length,
+                gaplessPlayback: true,
+                builder: (context, index) {
+                  final item = widget.posts[index];
+                  final isLocal =
+                      item['is_local_file'] == true || widget.isLocal;
+                  final ext = item['file_ext']?.toString();
+                  final rawOrig = _getOrigUrl(item);
+                  final rawSample = _getSampleUrl(item);
+                  final isVideoItem = SourceUrlResolver.isVideoMedia(
+                        url: rawOrig,
+                        fileExt: ext,
+                      ) ||
+                      SourceUrlResolver.isVideoMedia(url: rawSample) ||
+                      (isLocal && SourceUrlResolver.isVideoMedia(url: rawOrig));
+
+                  final postId = item['id']?.toString() ?? '$index';
+                  final site = item['site_id']?.toString() ??
+                      item['site']?.toString() ??
+                      'post';
+                  final heroTag = 'post_hero_${site}_$postId';
+
+                  if (isVideoItem) {
+                    final playableUrl = isLocal
+                        ? rawOrig
+                        : (SourceUrlResolver.isVideoMedia(url: rawOrig)
+                            ? rawOrig
+                            : rawSample);
+                    return PhotoViewGalleryPageOptions.customChild(
+                      child: SakuraVideoPlayer(
+                        videoUrl: playableUrl,
+                        posterUrl: _getThumbnailUrl(item),
+                        siteId: site,
+                        autoPlay: index == _currentIndex,
+                        looping: true,
+                        compact: false,
+                        onTapBackground: () {
+                          setState(() {
+                            _showUI = !_showUI;
+                          });
+                        },
+                      ),
+                      initialScale: PhotoViewComputedScale.contained,
+                      minScale: PhotoViewComputedScale.contained,
+                      maxScale: PhotoViewComputedScale.contained,
+                      heroAttributes: (index == _currentIndex ||
+                              index == widget.initialIndex)
+                          ? PhotoViewHeroAttributes(tag: heroTag)
+                          : null,
+                    );
+                  }
+
+                  final currentTier =
+                      _activeTiers[index] ?? _ResolutionTier.thumbnail;
+
+                  final String effectiveUrl;
+                  if (isLocal) {
+                    effectiveUrl = rawOrig;
+                  } else {
+                    switch (currentTier) {
+                      case _ResolutionTier.original:
+                        effectiveUrl = _resolvedMasterUrls[index] ?? rawOrig;
+                        break;
+                      case _ResolutionTier.sample:
+                        effectiveUrl = rawSample;
+                        break;
+                      case _ResolutionTier.thumbnail:
+                        effectiveUrl = _getThumbnailUrl(item);
+                        break;
+                    }
+                  }
+
+                  final ImageProvider provider;
+                  if (isLocal && File(effectiveUrl).existsSync()) {
+                    provider = FileImage(File(effectiveUrl));
+                  } else {
+                    provider = createSiteImageProvider(
+                      effectiveUrl,
+                      siteId: (item['site_id'] ?? item['site'])?.toString(),
+                    );
+                  }
+
+                  return PhotoViewGalleryPageOptions(
+                    controller: _getController(index),
+                    imageProvider: provider,
+                    filterQuality: FilterQuality.medium,
+                    initialScale: PhotoViewComputedScale.contained,
+                    minScale: PhotoViewComputedScale.contained * 0.8,
+                    maxScale: PhotoViewComputedScale.covered * 4.5,
+                    heroAttributes: (index == _currentIndex ||
+                            index == widget.initialIndex)
+                        ? PhotoViewHeroAttributes(tag: heroTag)
+                        : null,
+                    onTapUp: (_, __, ___) {
+                      setState(() {
+                        _showUI = !_showUI;
+                      });
+                    },
+                    scaleStateCycle: (actual) {
+                      _loadMediumImage(index);
+                      switch (actual) {
+                        case PhotoViewScaleState.initial:
+                          return PhotoViewScaleState.covering;
+                        default:
+                          return PhotoViewScaleState.initial;
+                      }
+                    },
+                  );
+                },
+                loadingBuilder: (_, event) => const Center(
+                  child: SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ),
+                onPageChanged: (index) {
+                  setState(() {
+                    _currentIndex = index;
+                    _dragOffsetY = 0.0;
+                  });
+                  if (index >= 0 && index < widget.posts.length) {
+                    HistoryService.instance.addHistory(widget.posts[index]);
+                    _loadPageWithSettings(index);
+                  }
+                },
+                backgroundDecoration: const BoxDecoration(
+                  color: Colors.transparent,
+                ),
+              ),
+            ),
+          ),
+        ),
+
+        // Top action bar (animated overlay，专注看图，移除左右翻页悬浮按钮与占位控件)
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: AnimatedOpacity(
+            opacity: _showUI ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 220),
+            child: IgnorePointer(
+              ignoring: !_showUI,
+              child: _buildTopBar(post),
+            ),
+          ),
+        ),
+      ],
+    );
 
     return Focus(
       focusNode: _focusNode,
       autofocus: true,
-      onKeyEvent: (node, event) {
-        _handleKey(event);
-        return KeyEventResult.handled;
-      },
+      onKeyEvent: (node, event) => _handleKey(event),
       child: Listener(
         onPointerSignal: (event) {
           if (event is PointerScrollEvent) {
@@ -403,181 +861,20 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
         },
         child: Scaffold(
           backgroundColor: Colors.black.withValues(alpha: bgAlpha),
-          body: Stack(
-            children: [
-              // Pull-down dismiss drag detector
-              GestureDetector(
-                onVerticalDragUpdate: (details) {
-                  if (_isCurrentZoomed()) return;
-                  setState(() {
-                    _dragOffsetY += details.delta.dy;
-                    if (_dragOffsetY < 0) _dragOffsetY = 0;
-                  });
-                },
-                onVerticalDragEnd: (details) {
-                  if (_dragOffsetY > 110 ||
-                      (details.primaryVelocity ?? 0) > 650) {
-                    Navigator.of(context).maybePop();
-                  } else {
-                    setState(() {
-                      _dragOffsetY = 0.0;
-                    });
-                  }
-                },
-                child: Transform.translate(
-                  offset: Offset(0, _dragOffsetY),
-                  child: Transform.scale(
-                    scale: currentScale,
-                    child: PhotoViewGallery.builder(
-                      pageController: _pageController,
-                      scrollPhysics: const BouncingScrollPhysics(),
-                      itemCount: widget.posts.length,
-                      builder: (context, index) {
-                        final item = widget.posts[index];
-                        final isLocal =
-                            item['is_local_file'] == true || widget.isLocal;
-                        final isOriginal = _originalLoaded[index] == true;
-                        final previewUrl = _getPreviewUrl(item);
-                        final origUrl = _getOrigUrl(item);
-                        final effectiveUrl = isOriginal ? origUrl : previewUrl;
-
-                        final ImageProvider provider;
-                        if (isLocal) {
-                          provider = FileImage(File(effectiveUrl));
-                        } else {
-                          provider = createSiteImageProvider(effectiveUrl);
-                        }
-
-                        return PhotoViewGalleryPageOptions(
-                          controller: _getController(index),
-                          imageProvider: provider,
-                          initialScale: PhotoViewComputedScale.contained,
-                          minScale: PhotoViewComputedScale.contained * 0.8,
-                          maxScale: PhotoViewComputedScale.covered * 4.5,
-                          heroAttributes: PhotoViewHeroAttributes(
-                            tag: 'post_${item['id']}_$index',
-                          ),
-                          onTapUp: (_, __, ___) {
-                            setState(() {
-                              _showUI = !_showUI;
-                            });
-                          },
-                          scaleStateCycle: (actual) {
-                            switch (actual) {
-                              case PhotoViewScaleState.initial:
-                                return PhotoViewScaleState.covering;
-                              default:
-                                return PhotoViewScaleState.initial;
-                            }
-                          },
-                        );
-                      },
-                      loadingBuilder: (_, event) => const Center(
-                        child: SakuraLoader(size: 32),
-                      ),
-                      onPageChanged: (index) {
-                        setState(() {
-                          _currentIndex = index;
-                          _dragOffsetY = 0.0;
-                        });
-                      },
-                      backgroundDecoration: const BoxDecoration(
-                        color: Colors.transparent,
-                      ),
+          body: isWide && _tabletDetailOpen
+              ? Row(
+                  children: [
+                    Expanded(
+                      child: galleryView,
                     ),
-                  ),
-                ),
-              ),
-
-              // Side navigation buttons (Chevrons inspired by Pixes)
-              if (_currentIndex > 0)
-                Positioned(
-                  left: 12,
-                  top: 0,
-                  bottom: 0,
-                  child: Center(
-                    child: AnimatedOpacity(
-                      opacity: _showUI ? 1.0 : 0.0,
-                      duration: const Duration(milliseconds: 220),
-                      child: IgnorePointer(
-                        ignoring: !_showUI,
-                        child: Material(
-                          color: Colors.black45,
-                          shape: const CircleBorder(),
-                          clipBehavior: Clip.antiAlias,
-                          child: IconButton(
-                            icon: const Icon(Icons.chevron_left_rounded,
-                                color: Colors.white, size: 28),
-                            tooltip: '上一张',
-                            onPressed: _previousPage,
-                          ),
-                        ),
-                      ),
+                    _TabletDetailPane(
+                      post: post,
+                      onClose: () => setState(() => _tabletDetailOpen = false),
+                      onTagTap: _onTagClicked,
                     ),
-                  ),
-                ),
-
-              if (_currentIndex < widget.posts.length - 1)
-                Positioned(
-                  right: 12,
-                  top: 0,
-                  bottom: 0,
-                  child: Center(
-                    child: AnimatedOpacity(
-                      opacity: _showUI ? 1.0 : 0.0,
-                      duration: const Duration(milliseconds: 220),
-                      child: IgnorePointer(
-                        ignoring: !_showUI,
-                        child: Material(
-                          color: Colors.black45,
-                          shape: const CircleBorder(),
-                          clipBehavior: Clip.antiAlias,
-                          child: IconButton(
-                            icon: const Icon(Icons.chevron_right_rounded,
-                                color: Colors.white, size: 28),
-                            tooltip: '下一张',
-                            onPressed: _nextPage,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-
-              // Top action bar (animated overlay)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: AnimatedOpacity(
-                  opacity: _showUI ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 220),
-                  child: IgnorePointer(
-                    ignoring: !_showUI,
-                    child: _buildTopBar(post),
-                  ),
-                ),
-              ),
-
-              // Bottom action capsule (animated overlay, pinned to bottom center)
-              Positioned(
-                bottom: 24,
-                left: 0,
-                right: 0,
-                child: AnimatedOpacity(
-                  opacity: _showUI ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 220),
-                  child: Align(
-                    alignment: Alignment.bottomCenter,
-                    child: IgnorePointer(
-                      ignoring: !_showUI,
-                      child: _buildBottomBar(post),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
+                  ],
+                )
+              : galleryView,
         ),
       ),
     );
@@ -585,8 +882,30 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
 
   Widget _buildTopBar(Map<String, dynamic> post) {
     final topPadding = MediaQuery.of(context).padding.top;
-    final postId = post['id']?.toString() ?? '';
-    final site = post['site']?.toString() ?? '';
+    final postIdStr = post['id']?.toString() ?? '';
+    final siteProvider = context.watch<SiteConfigProvider>();
+    final siteId = _resolvePostSiteId(post, siteProvider);
+    final adapter = widget.isLocal ? null : siteProvider.adapterFor(siteId);
+    final supportsVoting =
+        !widget.isLocal && (adapter?.descriptor.capabilities.supportsVoting ?? false);
+    final voteKey = _voteCacheKey(siteId, postIdStr);
+    final userVote = _userVotes[voteKey] ?? 0;
+    final scoreValue = post['score'] is int
+        ? post['score'] as int
+        : int.tryParse(post['score']?.toString() ?? '') ?? 0;
+
+    final isOriginal = _activeTiers[_currentIndex] == _ResolutionTier.original;
+    final isLoadingOriginal = _originalLoading[_currentIndex] == true;
+
+    final favNotifier = context.watch<FavoritesNotifier>();
+    final favKey = postIdStr.isNotEmpty
+        ? postIdStr
+        : (post['file_url']?.toString() ?? '');
+    final isFav = favNotifier.isFavorite(favKey);
+
+    final downloadNotifier = context.watch<BaseDownloadNotifier>();
+    final isDownloaded =
+        downloadNotifier.downloadedItems.any((it) => it.id == postIdStr);
 
     return Container(
       padding: EdgeInsets.fromLTRB(12, topPadding + 6, 12, 10),
@@ -595,156 +914,325 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
-            Colors.black.withValues(alpha: 0.68),
-            Colors.black.withValues(alpha: 0.25),
+            Colors.black.withValues(alpha: 0.72),
+            Colors.black.withValues(alpha: 0.28),
             Colors.transparent,
           ],
         ),
       ),
       child: Row(
         children: [
-          // Back button
           Material(
             color: Colors.black38,
             shape: const CircleBorder(),
             clipBehavior: Clip.antiAlias,
             child: IconButton(
-              icon: const Icon(Icons.arrow_back_rounded,
-                  color: Colors.white, size: 22),
+              icon: const Icon(
+                Icons.arrow_back_rounded,
+                color: Colors.white,
+                size: 22,
+              ),
               tooltip: '返回',
               onPressed: () => Navigator.of(context).maybePop(),
             ),
           ),
-          const SizedBox(width: 12),
-
-          // Page counter & Post ID capsule
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.black45,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white12),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '${_currentIndex + 1} / ${widget.posts.length}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
+          const SizedBox(width: 10),
+          if (postIdStr.isNotEmpty)
+            Expanded(
+              child: Text(
+                'POST #$postIdStr',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.88),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
                 ),
-                if (site.isNotEmpty) ...[
-                  const SizedBox(width: 6),
-                  Container(
-                    width: 3,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: Colors.white38,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    site,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.85),
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-                if (postId.isNotEmpty) ...[
-                  const SizedBox(width: 6),
-                  Text(
-                    '#$postId',
-                    style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: 11,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const Spacer(),
+              ),
+            )
+          else
+            const Spacer(),
 
-          // Browser open button
+          if (supportsVoting && postIdStr.isNotEmpty) ...[
+            Material(
+              color: Colors.black38,
+              shape: const StadiumBorder(),
+              clipBehavior: Clip.antiAlias,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 34,
+                      ),
+                      padding: EdgeInsets.zero,
+                      tooltip: userVote > 0 ? '取消赞同' : '赞同 +1',
+                      icon: Icon(
+                        userVote > 0
+                            ? Icons.thumb_up_rounded
+                            : Icons.thumb_up_outlined,
+                        size: 16,
+                        color: userVote > 0
+                            ? const Color(0xFFFF88B5)
+                            : Colors.white70,
+                      ),
+                      onPressed: () => _voteGalleryPost(post, 1),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      child: Text(
+                        '$scoreValue',
+                        style: TextStyle(
+                          color: userVote > 0
+                              ? const Color(0xFFFF88B5)
+                              : (userVote < 0
+                                  ? const Color(0xFFFCA5A5)
+                                  : Colors.white),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 34,
+                      ),
+                      padding: EdgeInsets.zero,
+                      tooltip: userVote < 0 ? '取消点踩' : '点踩 -1',
+                      icon: Icon(
+                        userVote < 0
+                            ? Icons.thumb_down_rounded
+                            : Icons.thumb_down_outlined,
+                        size: 16,
+                        color: userVote < 0
+                            ? const Color(0xFFFCA5A5)
+                            : Colors.white70,
+                      ),
+                      onPressed: () => _voteGalleryPost(post, -1),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+          ],
+
+          // 1. HD 原图加载
           Material(
             color: Colors.black38,
             shape: const CircleBorder(),
             clipBehavior: Clip.antiAlias,
             child: IconButton(
-              icon: const Icon(Icons.open_in_browser_rounded,
-                  color: Colors.white, size: 20),
-              tooltip: '在浏览器中打开',
+              icon: isLoadingOriginal
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Icon(
+                      isOriginal ? Icons.hd_rounded : Icons.hd_outlined,
+                      color: isOriginal
+                          ? Theme.of(context).colorScheme.primary
+                          : Colors.white70,
+                      size: 21,
+                    ),
+              tooltip: isOriginal ? '已显示原图' : '加载高清原图',
               onPressed: () {
-                final source = post['source'] as String? ?? '';
-                final orig = _getOrigUrl(post);
-                _openInBrowser(source.isNotEmpty ? source : orig);
+                if (isOriginal) {
+                  _showToast('当前已是高清原图');
+                } else if (!isLoadingOriginal) {
+                  _requestOriginalImage(_currentIndex);
+                }
               },
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 4),
 
-          // Overflow menu
+          // 2. 收藏（支持 Danbooru 云端双向同步）
+          Material(
+            color: Colors.black38,
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: IconButton(
+              icon: Icon(
+                isFav
+                    ? Icons.favorite_rounded
+                    : Icons.favorite_border_rounded,
+                color: isFav ? const Color(0xFFFF4B72) : Colors.white70,
+                size: 21,
+              ),
+              tooltip: isFav ? '取消收藏' : '添加收藏',
+              onPressed: () => _toggleGalleryFavorite(post),
+            ),
+          ),
+          const SizedBox(width: 4),
+
+          // 3. 下载
+          Material(
+            color: Colors.black38,
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: IconButton(
+              icon: Icon(
+                isDownloaded
+                    ? Icons.check_circle_rounded
+                    : Icons.download_rounded,
+                color: isDownloaded ? const Color(0xFF10B981) : Colors.white70,
+                size: 21,
+              ),
+              tooltip: isDownloaded ? '已在相册中' : '下载',
+              onPressed: () async {
+                if (isDownloaded) {
+                  _showToast('该图片已在下载目录中');
+                } else {
+                  final res = await context
+                      .read<BaseDownloadNotifier>()
+                      .enqueueDownload(post);
+                  switch (res) {
+                    case EnqueueResult.success:
+                      _showToast('已加入下载队列');
+                      break;
+                    case EnqueueResult.alreadyDownloaded:
+                      _showToast('该图片已存在');
+                      break;
+                    case EnqueueResult.alreadyInQueue:
+                      _showToast('该图片已在下载队列中');
+                      break;
+                    case EnqueueResult.failed:
+                      _showToast('加入下载队列失败');
+                      break;
+                  }
+                }
+              },
+            ),
+          ),
+          const SizedBox(width: 4),
+
+          // 4. 精简三点菜单（含明确的分享当前帖子功能）
           Material(
             color: Colors.black38,
             shape: const CircleBorder(),
             clipBehavior: Clip.antiAlias,
             child: PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert_rounded,
-                  color: Colors.white, size: 20),
+              icon: const Icon(
+                Icons.more_vert_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
               color: const Color(0xFF1E212B),
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-              onSelected: (value) {
+                borderRadius: BorderRadius.circular(14),
+              ),
+              onSelected: (value) async {
+                final postIdInt = int.tryParse(postIdStr) ?? 0;
+                final canonicalPost = SourceUrlResolver.canonicalPostUrl(
+                  siteId: siteId,
+                  postId: postIdInt,
+                );
+                final origUrl = _getOrigUrl(post);
+
                 switch (value) {
-                  case 'copy_image_url':
-                    _copyToClipboard(_getOrigUrl(post), '原图链接');
+                  case 'share_post':
+                    final shareText = SourceUrlResolver.formatShareText(
+                      postId: postIdInt,
+                      canonicalPostUrl: canonicalPost,
+                      fallbackUrl: origUrl,
+                    );
+                    final localPath = (post['local_file_path'] ??
+                            post['localPath'] ??
+                            post['local_path'])
+                        ?.toString();
+                    await showShareOptionsSheet(
+                      context: context,
+                      shareText: shareText,
+                      subject: 'POST #$postIdInt',
+                      linkToCopy:
+                          canonicalPost.isNotEmpty ? canonicalPost : origUrl,
+                      localFilePath: localPath,
+                    );
                     break;
-                  case 'copy_source':
-                    final source = post['source'] as String? ?? '';
-                    _copyToClipboard(
-                        source.isNotEmpty ? source : _getOrigUrl(post),
-                        '来源链接');
+                  case 'copy_share_post':
+                    final shareText = SourceUrlResolver.formatShareText(
+                      postId: postIdInt,
+                      canonicalPostUrl: canonicalPost,
+                      fallbackUrl: origUrl,
+                    );
+                    _copyToClipboard(shareText, '分享内容');
                     break;
                   case 'info':
-                    _showDetailsModal(post);
+                    _handleInfoTap(post);
+                    break;
+                  case 'copy_image_url':
+                    _copyToClipboard(origUrl, '原图链接');
+                    break;
+                  case 'browser':
+                    final sourceFallback = SourceUrlResolver.normalizeDisplaySource(
+                      post['source'] as String?,
+                    );
+                    final target = canonicalPost.isNotEmpty
+                        ? canonicalPost
+                        : (sourceFallback.isNotEmpty ? sourceFallback : origUrl);
+                    _openInBrowser(target);
                     break;
                 }
               },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: 'share_post',
+                  child: Row(
+                    children: [
+                      Icon(Icons.share_outlined, size: 18, color: Colors.white70),
+                      SizedBox(width: 10),
+                      Text('分享当前帖子', style: TextStyle(color: Colors.white)),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'copy_share_post',
+                  child: Row(
+                    children: [
+                      Icon(Icons.copy_all_rounded, size: 18, color: Colors.white70),
+                      SizedBox(width: 10),
+                      Text('复制分享内容', style: TextStyle(color: Colors.white)),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
                   value: 'copy_image_url',
                   child: Row(
                     children: [
                       Icon(Icons.link_rounded, size: 18, color: Colors.white70),
                       SizedBox(width: 10),
-                      Text('复制原图直链', style: TextStyle(color: Colors.white)),
+                      Text('复制原图链接', style: TextStyle(color: Colors.white)),
                     ],
                   ),
                 ),
-                const PopupMenuItem(
-                  value: 'copy_source',
-                  child: Row(
-                    children: [
-                      Icon(Icons.launch_rounded,
-                          size: 18, color: Colors.white70),
-                      SizedBox(width: 10),
-                      Text('复制来源出处', style: TextStyle(color: Colors.white)),
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: 'info',
                   child: Row(
                     children: [
-                      Icon(Icons.info_outline_rounded,
-                          size: 18, color: Colors.white70),
+                      Icon(Icons.info_outline_rounded, size: 18, color: Colors.white70),
                       SizedBox(width: 10),
-                      Text('查看详细属性', style: TextStyle(color: Colors.white)),
+                      Text('查看详情', style: TextStyle(color: Colors.white)),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'browser',
+                  child: Row(
+                    children: [
+                      Icon(Icons.open_in_browser_rounded, size: 18, color: Colors.white70),
+                      SizedBox(width: 10),
+                      Text('在浏览器中打开', style: TextStyle(color: Colors.white)),
                     ],
                   ),
                 ),
@@ -752,242 +1240,6 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildBottomBar(Map<String, dynamic> post) {
-    final postIdStr = post['id']?.toString() ?? '';
-    final favNotifier = context.watch<FavoritesNotifier>();
-    final isFav = favNotifier.isFavorite(postIdStr);
-
-    final downloadNotifier = context.watch<BaseDownloadNotifier>();
-    final isDownloaded =
-        downloadNotifier.downloadedItems.any((it) => it.id == postIdStr);
-
-    final isOrigLoaded = _originalLoaded[_currentIndex] == true;
-    final isOrigLoading = _originalLoading[_currentIndex] == true;
-    final progress = _originalProgress[_currentIndex];
-    final hasOrigAvailable = _hasOriginalAvailable(post);
-
-    final fileSizeStr = ViewerFormatUtils.fileSize(
-      post['file_size'] as int? ?? 0,
-    );
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(32),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xCC1A1D24),
-            borderRadius: BorderRadius.circular(32),
-            border:
-                Border.all(color: Colors.white.withValues(alpha: 0.12)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.35),
-                blurRadius: 18,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Original quality progressive pill button
-              _buildOriginalQualityPill(
-                isLoaded: isOrigLoaded,
-                isLoading: isOrigLoading,
-                progress: progress,
-                hasOriginal: hasOrigAvailable,
-                fileSizeStr: fileSizeStr,
-                onTap: () => _loadOriginal(_currentIndex),
-              ),
-              const SizedBox(width: 8),
-
-              // Favorite button with heart pulse animation
-              Material(
-                color: Colors.transparent,
-                shape: const CircleBorder(),
-                child: IconButton(
-                  icon: Icon(
-                    isFav
-                        ? Icons.favorite_rounded
-                        : Icons.favorite_border_rounded,
-                    color: isFav ? const Color(0xFFFF4B72) : Colors.white70,
-                    size: 22,
-                  ),
-                  tooltip: isFav ? '取消收藏' : '添加收藏',
-                  onPressed: () {
-                    context.read<FavoritesNotifier>().toggleFavorite(post);
-                  },
-                ),
-              ),
-
-              // Download button
-              Material(
-                color: Colors.transparent,
-                shape: const CircleBorder(),
-                child: IconButton(
-                  icon: Icon(
-                    isDownloaded
-                        ? Icons.check_circle_rounded
-                        : Icons.download_rounded,
-                    color: isDownloaded
-                        ? const Color(0xFF10B981)
-                        : Colors.white70,
-                    size: 22,
-                  ),
-                  tooltip: isDownloaded ? '已下载' : '下载原图',
-                  onPressed: () async {
-                    if (isDownloaded) {
-                      _showToast('该图片已在下载相册中');
-                    } else {
-                      final res = await context
-                          .read<BaseDownloadNotifier>()
-                          .enqueueDownload(post);
-                      switch (res) {
-                        case EnqueueResult.success:
-                          _showToast('已加入下载队列');
-                          break;
-                        case EnqueueResult.alreadyDownloaded:
-                          _showToast('该图片已存在于相册');
-                          break;
-                        case EnqueueResult.alreadyInQueue:
-                          _showToast('该图片已在下载队列中');
-                          break;
-                        case EnqueueResult.failed:
-                          _showToast('加入下载队列失败');
-                          break;
-                      }
-                    }
-                  },
-                ),
-              ),
-
-              // Post info sheet trigger
-              Material(
-                color: Colors.transparent,
-                shape: const CircleBorder(),
-                child: IconButton(
-                  icon: const Icon(
-                    Icons.info_outline_rounded,
-                    color: Colors.white70,
-                    size: 22,
-                  ),
-                  tooltip: '图片详情与标签',
-                  onPressed: () => _showDetailsModal(post),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOriginalQualityPill({
-    required bool isLoaded,
-    required bool isLoading,
-    required double? progress,
-    required bool hasOriginal,
-    required String fileSizeStr,
-    required VoidCallback onTap,
-  }) {
-    if (isLoaded) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: const Color(0xFF10B981).withValues(alpha: 0.18),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-              color: const Color(0xFF10B981).withValues(alpha: 0.4)),
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.check_circle_rounded,
-                size: 14, color: Color(0xFF10B981)),
-            SizedBox(width: 5),
-            Text(
-              '原图',
-              style: TextStyle(
-                color: Color(0xFF10B981),
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (isLoading) {
-      final percentStr =
-          progress != null ? '${(progress * 100).toInt()}%' : '载入中';
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.blueAccent.withValues(alpha: 0.2),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-              color: Colors.blueAccent.withValues(alpha: 0.4)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 12,
-              height: 12,
-              child: CircularProgressIndicator(
-                value: progress,
-                strokeWidth: 2,
-                color: Colors.blueAccent,
-                backgroundColor: Colors.white24,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              percentStr,
-              style: const TextStyle(
-                color: Colors.blueAccent,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // Not loaded yet
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white24),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.bolt_rounded, size: 15, color: Colors.amberAccent),
-            const SizedBox(width: 4),
-            Text(
-              fileSizeStr.isNotEmpty ? '原图 ($fileSizeStr)' : '加载原图',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -1008,13 +1260,99 @@ class _SakuraPhotoGalleryViewerState extends State<SakuraPhotoGalleryViewer> {
   }
 }
 
-/// Rich metadata, categorized tag chips, and booru post inspector sheet.
+/// Tablet side-by-side detail pane (35% width or ~380px docked).
+class _TabletDetailPane extends StatelessWidget {
+  final Map<String, dynamic> post;
+  final VoidCallback onClose;
+  final ValueChanged<String> onTagTap;
+
+  const _TabletDetailPane({
+    required this.post,
+    required this.onClose,
+    required this.onTagTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final totalWidth = MediaQuery.of(context).size.width;
+    final paneWidth = (totalWidth * 0.36).clamp(280.0, 360.0);
+
+    return Container(
+      width: paneWidth,
+      decoration: BoxDecoration(
+        color: cs.surface.withValues(alpha: 0.96),
+        border: Border(
+          left: BorderSide(
+            color: cs.outlineVariant.withValues(alpha: 0.35),
+          ),
+        ),
+      ),
+      child: SafeArea(
+        child: _PostDetailBody(
+          post: post,
+          isSheet: false,
+          onClose: onClose,
+          onTagTap: onTagTap,
+        ),
+      ),
+    );
+  }
+}
+
+/// Rich metadata, categorized tag chips modal bottom sheet.
 class _PostDetailSheet extends StatelessWidget {
   final Map<String, dynamic> post;
   final ValueChanged<String> onTagTap;
 
   const _PostDetailSheet({
     required this.post,
+    required this.onTagTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.62,
+      minChildSize: 0.35,
+      maxChildSize: 0.94,
+      builder: (context, scrollCtrl) {
+        return ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(
+              color: cs.surface.withValues(alpha: 0.94),
+              child: _PostDetailBody(
+                post: post,
+                scrollController: scrollCtrl,
+                isSheet: true,
+                onTagTap: onTagTap,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Shared post details body with zero emojis.
+class _PostDetailBody extends StatelessWidget {
+  final Map<String, dynamic> post;
+  final ScrollController? scrollController;
+  final bool isSheet;
+  final VoidCallback? onClose;
+  final ValueChanged<String> onTagTap;
+
+  const _PostDetailBody({
+    required this.post,
+    this.scrollController,
+    required this.isSheet,
+    this.onClose,
     required this.onTagTap,
   });
 
@@ -1026,19 +1364,35 @@ class _PostDetailSheet extends StatelessWidget {
       'general': [],
     };
 
-    void addFromStr(String? raw, String cat) {
-      if (raw == null || raw.trim().isEmpty) return;
-      for (final t in raw.trim().split(RegExp(r'\s+'))) {
-        if (t.isNotEmpty && !res[cat]!.contains(t)) {
-          res[cat]!.add(t);
+    void addFromListOrStr(dynamic raw, String cat) {
+      if (raw is List) {
+        for (final item in raw) {
+          final t = item.toString().trim();
+          if (t.isNotEmpty && !res[cat]!.contains(t)) {
+            res[cat]!.add(t);
+          }
+        }
+        return;
+      }
+      if (raw is String && raw.trim().isNotEmpty) {
+        for (final t in raw.trim().split(RegExp(r'\s+'))) {
+          if (t.isNotEmpty && !res[cat]!.contains(t)) {
+            res[cat]!.add(t);
+          }
         }
       }
     }
 
-    addFromStr(p['tag_string_artist'] as String?, 'artist');
-    addFromStr(p['tag_string_character'] as String?, 'character');
-    addFromStr(p['tag_string_copyright'] as String?, 'copyright');
-    addFromStr(p['tag_string_general'] as String?, 'general');
+    addFromListOrStr(p['artist_tags'] ?? p['tag_string_artist'], 'artist');
+    addFromListOrStr(
+      p['character_tags'] ?? p['tag_string_character'],
+      'character',
+    );
+    addFromListOrStr(
+      p['copyright_tags'] ?? p['tag_string_copyright'],
+      'copyright',
+    );
+    addFromListOrStr(p['general_tags'] ?? p['tag_string_general'], 'general');
 
     final rawAll = (p['tags'] as String? ?? '').trim();
     if (rawAll.isNotEmpty) {
@@ -1065,14 +1419,6 @@ class _PostDetailSheet extends StatelessWidget {
       }
     }
 
-    final author = (p['author'] as String?)?.trim();
-    if (res['artist']!.isEmpty &&
-        author != null &&
-        author.isNotEmpty &&
-        author != 'unknown') {
-      res['artist']!.add(author);
-    }
-
     return res;
   }
 
@@ -1080,8 +1426,11 @@ class _PostDetailSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final (ratingLabel, ratingColor) =
-        ViewerFormatUtils.parseRating(post['rating'] as String?);
+    final siteId = (post['site_id'] ?? post['site'])?.toString();
+    final (ratingLabel, _) = ViewerFormatUtils.parseRating(
+      post['rating'] as String?,
+      siteId: siteId,
+    );
 
     final resStr = ViewerFormatUtils.resolution(
       post['width'] as num?,
@@ -1094,275 +1443,336 @@ class _PostDetailSheet extends StatelessWidget {
     final timeStr = ViewerFormatUtils.timeAgo(
       post['created_at'] as int? ?? 0,
     );
-    final authorStr = (post['author'] as String? ?? '').trim();
+    final uploaderStr = (post['uploader'] as String? ?? '').trim();
     final postId = post['id']?.toString() ?? '';
     final hasChildren = post['has_children'] == true;
 
     final tagsMap = _categorizeTags(post);
+    final artistStr = tagsMap['artist']!.join(', ');
+    final rawSite = siteId ?? 'yandere';
+    final canonicalPost = SourceUrlResolver.canonicalPostUrl(
+      siteId: rawSite,
+      postId: int.tryParse(postId) ?? 0,
+    );
+    final normalizedSources = SourceUrlResolver.normalizeSourceUrls(
+      post['source'] as String?,
+    );
 
-    return DraggableScrollableSheet(
-      initialChildSize: 0.62,
-      minChildSize: 0.35,
-      maxChildSize: 0.94,
-      builder: (context, scrollCtrl) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+    return SelectionArea(
+      child: ListView(
+        controller: scrollController,
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+        children: [
+        if (isSheet) ...[
+          // Drag handle
+          Center(
             child: Container(
-              color: cs.surface.withValues(alpha: 0.92),
-              child: ListView(
-                controller: scrollCtrl,
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
-                children: [
-                  // Drag handle
-                  Center(
-                    child: Container(
-                      width: 44,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color:
-                            cs.onSurfaceVariant.withValues(alpha: 0.35),
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Header row: Post ID & Rating chip
-                  Row(
-                    children: [
-                      Text(
-                        '#$postId 详情',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: cs.onSurface,
-                        ),
-                      ),
-                      const Spacer(),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: ratingColor.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                              color: ratingColor.withValues(alpha: 0.5)),
-                        ),
-                        child: Text(
-                          ratingLabel,
-                          style: TextStyle(
-                            color: ratingColor,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-
-                  // Key metrics grid cards
-                  Row(
-                    children: [
-                      if (resStr.isNotEmpty)
-                        Expanded(
-                          child: _buildMetricTile(
-                            context,
-                            icon: Icons.aspect_ratio_rounded,
-                            title: '分辨率',
-                            value: resStr,
-                          ),
-                        ),
-                      if (resStr.isNotEmpty && sizeStr.isNotEmpty)
-                        const SizedBox(width: 8),
-                      if (sizeStr.isNotEmpty)
-                        Expanded(
-                          child: _buildMetricTile(
-                            context,
-                            icon: Icons.data_usage_rounded,
-                            title: '文件大小',
-                            value: extStr.isNotEmpty
-                                ? '$sizeStr ($extStr)'
-                                : sizeStr,
-                          ),
-                        ),
-                    ],
-                  ),
-                  if (authorStr.isNotEmpty || timeStr.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        if (authorStr.isNotEmpty)
-                          Expanded(
-                            child: _buildMetricTile(
-                              context,
-                              icon: Icons.person_rounded,
-                              title: '上传/作者',
-                              value: authorStr,
-                            ),
-                          ),
-                        if (authorStr.isNotEmpty && timeStr.isNotEmpty)
-                          const SizedBox(width: 8),
-                        if (timeStr.isNotEmpty)
-                          Expanded(
-                            child: _buildMetricTile(
-                              context,
-                              icon: Icons.schedule_rounded,
-                              title: '发布时间',
-                              value: timeStr,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
-
-                  // Has children group posts
-                  if (hasChildren) ...[
-                    const SizedBox(height: 14),
-                    OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 12, horizontal: 16),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14)),
-                      ),
-                      icon: const Icon(Icons.collections_bookmark_rounded),
-                      label: const Text('查看关联图组 (Group Posts)'),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          SakuraPageRoute(
-                            builder: (_) => GroupPostsScreen(parentPost: post),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-
-                  const SizedBox(height: 18),
-                  const Divider(height: 1),
-                  const SizedBox(height: 14),
-
-                  // Categorized tags
-                  _buildTagSection(
-                    title: '🎨 创作者 (Artist)',
-                    tags: tagsMap['artist']!,
-                    chipColor: const Color(0xFFFF5252),
-                  ),
-                  _buildTagSection(
-                    title: '👤 角色 (Character)',
-                    tags: tagsMap['character']!,
-                    chipColor: const Color(0xFF10B981),
-                  ),
-                  _buildTagSection(
-                    title: '🎬 作品/系列 (Copyright)',
-                    tags: tagsMap['copyright']!,
-                    chipColor: const Color(0xFF8B5CF6),
-                  ),
-                  _buildTagSection(
-                    title: '🏷️ 标签属性 (General)',
-                    tags: tagsMap['general']!,
-                    chipColor: const Color(0xFF0284C7),
-                  ),
-                ],
+              width: 44,
+              height: 5,
+              decoration: BoxDecoration(
+                color: cs.onSurfaceVariant.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(3),
               ),
             ),
           ),
-        );
-      },
-    );
-  }
+          const SizedBox(height: 16),
+        ],
 
-  Widget _buildMetricTile(
-    BuildContext context, {
-    required IconData icon,
-    required String title,
-    required String value,
-  }) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 20, color: cs.primary),
-          const SizedBox(width: 8),
-          Expanded(
+        // Header row: Post ID & Rating chip & Optional close button
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'POST #$postId',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: cs.onSurface,
+                ),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                ratingLabel,
+                style: TextStyle(
+                  color: cs.onSurfaceVariant,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            if (!isSheet && onClose != null) ...[
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.close_rounded, size: 20),
+                tooltip: '关闭',
+                onPressed: onClose,
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        // Clean unified metrics（严格区分作者与上传者）
+        Wrap(
+          spacing: 12,
+          runSpacing: 6,
+          children: [
+            if (resStr.isNotEmpty)
+              _buildMetricText(context, '分辨率', resStr),
+            if (sizeStr.isNotEmpty)
+              _buildMetricText(context, '大小',
+                  extStr.isNotEmpty ? '$sizeStr ($extStr)' : sizeStr),
+            if (artistStr.isNotEmpty)
+              _buildMetricText(context, '作者', artistStr),
+            if (uploaderStr.isNotEmpty)
+              _buildMetricText(context, '上传者', uploaderStr),
+            if (timeStr.isNotEmpty)
+              _buildMetricText(context, '时间', timeStr),
+          ],
+        ),
+
+        if (hasChildren) ...[
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            icon: const Icon(Icons.collections_bookmark_rounded, size: 16),
+            label: const Text('关联图组', style: TextStyle(fontSize: 13)),
+            onPressed: () {
+              Navigator.of(context).push(
+                SakuraPageRoute(
+                  builder: (_) => GroupPostsScreen(parentPost: post),
+                ),
+              );
+            },
+          ),
+        ],
+
+        if (canonicalPost.isNotEmpty || normalizedSources.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(10),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: cs.onSurfaceVariant.withValues(alpha: 0.8),
-                  ),
-                ),
-                Text(
-                  value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: cs.onSurface,
-                  ),
-                ),
+                if (canonicalPost.isNotEmpty)
+                  _buildCopyableLinkRow(context, '帖子链接', canonicalPost),
+                for (final src in normalizedSources)
+                  _buildCopyableLinkRow(context, '作品来源', src),
               ],
             ),
           ),
         ],
-      ),
+
+        const SizedBox(height: 14),
+        const Divider(height: 1),
+        const SizedBox(height: 12),
+
+        // 严格顺序：原作 -> 角色 -> 作者 -> 常规标签
+        _buildTagSection(
+          context,
+          icon: Icons.movie_outlined,
+          title: '原作',
+          tags: tagsMap['copyright']!,
+        ),
+        _buildTagSection(
+          context,
+          icon: Icons.person_outline,
+          title: '角色',
+          tags: tagsMap['character']!,
+        ),
+        _buildTagSection(
+          context,
+          icon: Icons.palette_outlined,
+          title: '作者',
+          tags: tagsMap['artist']!,
+        ),
+        _buildTagSection(
+          context,
+          icon: Icons.label_outline,
+          title: '标签',
+          tags: tagsMap['general']!,
+        ),
+      ],
+    ),
+  );
+  }
+
+  Widget _buildCopyableLinkRow(
+    BuildContext context,
+    String label,
+    String value,
+  ) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          '$label: ',
+          style: TextStyle(fontSize: 12, color: cs.outline),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+              fontSize: 12,
+              color: cs.primary,
+              decoration: value.startsWith('http')
+                  ? TextDecoration.underline
+                  : TextDecoration.none,
+            ),
+          ),
+        ),
+        IconButton(
+          tooltip: '复制$label',
+          icon: Icon(
+            Icons.content_copy_rounded,
+            size: 15,
+            color: cs.onSurfaceVariant,
+          ),
+          visualDensity: VisualDensity.compact,
+          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+          padding: const EdgeInsets.all(4),
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: value));
+            if (context.mounted) {
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(
+                  SnackBar(
+                    content: Text('已复制$label'),
+                    behavior: SnackBarBehavior.floating,
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+            }
+          },
+        ),
+      ],
     );
   }
 
-  Widget _buildTagSection({
+  Widget _buildMetricText(BuildContext context, String label, String value) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '$label: ',
+          style: TextStyle(
+            fontSize: 12,
+            color: cs.outline,
+          ),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: cs.onSurface,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTagSection(
+    BuildContext context, {
+    required IconData icon,
     required String title,
     required List<String> tags,
-    required Color chipColor,
   }) {
     if (tags.isEmpty) return const SizedBox.shrink();
+    final cs = Theme.of(context).colorScheme;
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.2,
-            ),
+          Row(
+            children: [
+              Icon(icon, size: 14, color: cs.primary),
+              const SizedBox(width: 6),
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: cs.primary,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Wrap(
             spacing: 6,
             runSpacing: 6,
             children: tags.map((t) {
-              return ActionChip(
-                label: Text(
-                  t,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: chipColor,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                backgroundColor: chipColor.withValues(alpha: 0.12),
-                side: BorderSide(
-                    color: chipColor.withValues(alpha: 0.35)),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                visualDensity: VisualDensity.compact,
-                onPressed: () => onTagTap(t),
+              return ListenableBuilder(
+                listenable: Listenable.merge([
+                  FollowedTagsService.instance,
+                  BlacklistService.instance,
+                ]),
+                builder: (context, _) {
+                  final isFollowed = FollowedTagsService.instance.isFollowed(t);
+                  final isBlocked = BlacklistService.instance.isBlocked(t);
+                  return GestureDetector(
+                    onLongPress: () => showTagActionSheet(
+                      context,
+                      t,
+                      onSearchTag: () => onTagTap(t),
+                    ),
+                    onSecondaryTap: () => showTagActionSheet(
+                      context,
+                      t,
+                      onSearchTag: () => onTagTap(t),
+                    ),
+                    child: ActionChip(
+                      avatar: isBlocked
+                          ? Icon(Icons.block_rounded, size: 14, color: cs.error)
+                          : (isFollowed
+                              ? Icon(Icons.star_rounded,
+                                  size: 14, color: cs.primary)
+                              : null),
+                      label: Text(
+                        t,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isBlocked ? cs.error : cs.onSurface,
+                          decoration:
+                              isBlocked ? TextDecoration.lineThrough : null,
+                        ),
+                      ),
+                      backgroundColor: cs.surfaceContainerHighest,
+                      side: BorderSide(
+                        color: isFollowed
+                            ? cs.primary.withValues(alpha: 0.45)
+                            : cs.outlineVariant.withValues(alpha: 0.35),
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      onPressed: () => onTagTap(t),
+                    ),
+                  );
+                },
               );
             }).toList(),
           ),

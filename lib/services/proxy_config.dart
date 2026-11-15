@@ -34,11 +34,11 @@ enum ProxyMode {
   String get subtitle {
     switch (this) {
       case ProxyMode.system:
-        return '自动读取操作系统网络代理配置或系统级 TUN/VPN 隧道';
+        return '使用系统网络代理或 TUN/VPN';
       case ProxyMode.manual:
-        return '手动指定 HTTP 代理服务器主机地址与端口 (Host:Port)';
+        return '指定 HTTP 代理主机与端口';
       case ProxyMode.none:
-        return '绕过 HTTP 代理配置，直接连接目标站点服务器';
+        return '直接连接目标服务器';
     }
   }
 
@@ -221,7 +221,7 @@ class ProxyConfig {
 
   /// Queries the operating system network proxy settings.
   static Future<SystemProxyInfo?> getSystemProxyInfo() async {
-    if (!kIsWeb && Platform.isAndroid) {
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
       try {
         final result = await _androidProxyChannel
             .invokeMapMethod<String, dynamic>('getSystemProxy');
@@ -239,14 +239,16 @@ class ProxyConfig {
               host: host,
               port: port,
               nonProxyHosts: exclusions,
-              source: 'Android ConnectivityManager',
+              source: Platform.isIOS
+                  ? 'iOS CFNetwork Proxy'
+                  : 'Android ConnectivityManager',
             );
             _cachedSystemProxy = info;
             return info;
           }
         }
       } catch (e) {
-        _log.fine('Android system proxy channel unavailable or empty: $e');
+        _log.fine('Mobile system proxy channel unavailable or empty: $e');
       }
     }
 
@@ -380,32 +382,44 @@ class ProxyConfig {
     );
   }
 
-  /// Creates an [http.Client] configured with the current proxy settings.
-  static Future<http.Client> createClient() async {
+  /// Creates a configured native [HttpClient] honoring the current proxy settings.
+  static Future<HttpClient> createNativeHttpClient({
+    Duration connectionTimeout = const Duration(seconds: 15),
+    Duration idleTimeout = const Duration(seconds: 30),
+    int? maxConnectionsPerHost,
+  }) async {
     final mode = await getProxyMode();
     final manualAddress = await getProxyAddress();
     final sysProxy = mode == ProxyMode.system ? await getSystemProxyInfo() : null;
 
     _log.info(
-      'createClient: mode=${mode.name}, manual="$manualAddress", system=${sysProxy?.address ?? "DIRECT"}',
+      'createNativeHttpClient: mode=${mode.name}, manual="$manualAddress", system=${sysProxy?.address ?? "DIRECT"}',
     );
 
+    final httpClient = HttpClient();
+    httpClient.connectionTimeout = connectionTimeout;
+    httpClient.idleTimeout = idleTimeout;
+    if (maxConnectionsPerHost != null) {
+      httpClient.maxConnectionsPerHost = maxConnectionsPerHost;
+    }
+
+    httpClient.findProxy = (Uri uri) {
+      final directive = resolveProxyDirectiveForUri(
+        uri,
+        mode: mode,
+        manualAddress: manualAddress,
+        systemProxy: sysProxy,
+      );
+      _log.fine('findProxy(${uri.host}) => $directive');
+      return directive;
+    };
+    return httpClient;
+  }
+
+  /// Creates an [http.Client] configured with the current proxy settings.
+  static Future<http.Client> createClient() async {
     try {
-      final httpClient = HttpClient();
-      httpClient.connectionTimeout = const Duration(seconds: 15);
-      httpClient.idleTimeout = const Duration(seconds: 30);
-
-      httpClient.findProxy = (Uri uri) {
-        final directive = resolveProxyDirectiveForUri(
-          uri,
-          mode: mode,
-          manualAddress: manualAddress,
-          systemProxy: sysProxy,
-        );
-        _log.fine('findProxy(${uri.host}) => $directive');
-        return directive;
-      };
-
+      final httpClient = await createNativeHttpClient();
       return IOClient(httpClient);
     } catch (e, st) {
       _log.severe('createClient FAILED: $e\n$st');

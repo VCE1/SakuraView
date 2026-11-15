@@ -112,19 +112,27 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
     final cs = theme.colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('网络与代理设置'),
+        leading: IconButton(
+          tooltip: '返回',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
+        title: const Text('网络代理'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
-            tooltip: '重新检测系统代理状态',
+            tooltip: '刷新',
             onPressed: _refreshSystemProxy,
           ),
         ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16.0),
+          : Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 720),
+                child: ListView(
+                  padding: const EdgeInsets.all(16.0),
               children: <Widget>[
                 Card(
                   margin: EdgeInsets.zero,
@@ -206,6 +214,8 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                   _buildTestResultCard(theme, _testResult!),
                 ],
               ],
+                ),
+              ),
             ),
     );
   }
@@ -214,51 +224,48 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
     final detected = _systemProxy;
     final cs = theme.colorScheme;
     return Card(
+      elevation: 0,
+      color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
       margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: const EdgeInsets.all(14.0),
+        child: Row(
           children: [
-            Row(
-              children: [
-                Icon(
-                  detected != null ? Icons.hub_rounded : Icons.public_rounded,
-                  color: cs.primary,
-                  size: 20,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '当前系统网络环境状态',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
+            Icon(
+              detected != null ? Icons.hub_rounded : Icons.public_rounded,
+              color: cs.primary,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    detected != null
+                        ? '系统代理：${detected.address}'
+                        : '当前：直接连接 (DIRECT)',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-                ),
-                TextButton.icon(
-                  onPressed: _refreshSystemProxy,
-                  icon: const Icon(Icons.sync_rounded, size: 16),
-                  label: const Text('刷新'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              detected != null
-                  ? '已检测到系统代理：${detected.address}\n配置来源：${detected.source}'
-                  : '未检测到显式系统 HTTP 代理。\n网络请求将通过系统默认网卡或 TUN 虚拟网卡直接路由 (DIRECT)。',
-              style: theme.textTheme.bodyMedium,
-            ),
-            if (detected != null && detected.nonProxyHosts.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(
-                '绕过规则：${detected.nonProxyHosts.join(", ")}',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
+                  if (detected != null && detected.nonProxyHosts.isNotEmpty)
+                    Text(
+                      '绕过：${detected.nonProxyHosts.join(", ")}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                ],
               ),
-            ],
+            ),
+            TextButton(
+              onPressed: _refreshSystemProxy,
+              child: const Text('刷新'),
+            ),
           ],
         ),
       ),
@@ -266,10 +273,14 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
   }
 
   Widget _buildManualProxyCard(ThemeData theme) {
+    final cs = theme.colorScheme;
     return Card(
+      elevation: 0,
+      color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
       margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(14.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -296,14 +307,7 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                 });
               },
             ),
-            const SizedBox(height: 12),
-            Text(
-              '常用预设端口：',
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               runSpacing: 6,
@@ -327,8 +331,9 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
   }
 
   Widget _buildTestResultCard(ThemeData theme, ProxyTestResult res) {
-    final color = res.success ? Colors.green : theme.colorScheme.error;
+    final color = res.success ? theme.colorScheme.primary : theme.colorScheme.error;
     return Card(
+      elevation: 0,
       margin: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(14.0),
@@ -338,7 +343,7 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
             Icon(
               res.success ? Icons.check_circle_rounded : Icons.error_outline_rounded,
               color: color,
-              size: 22,
+              size: 20,
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -347,17 +352,12 @@ class _ProxySettingsPageState extends State<ProxySettingsPage> {
                 children: [
                   Text(
                     res.success
-                        ? '站点连通性正常 (${res.elapsedMs} ms)'
+                        ? '连接正常 (${res.elapsedMs} ms)'
                         : '连接失败 (${res.elapsedMs} ms)',
                     style: TextStyle(
                       color: color,
-                      fontWeight: FontWeight.bold,
+                      fontWeight: FontWeight.w600,
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '生效路由指令：${res.effectiveDirective}',
-                    style: theme.textTheme.bodySmall,
                   ),
                   if (res.errorMessage != null) ...[
                     const SizedBox(height: 2),

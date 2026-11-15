@@ -1,7 +1,7 @@
 import 'package:vce1_sakuraview/api/image_api_client.dart';
-import 'package:vce1_sakuraview/api/danbooru_api_client.dart';
-import 'package:vce1_sakuraview/api/yandere_api_client.dart';
-import 'package:vce1_sakuraview/api/zerochan_api_client.dart';
+import 'package:vce1_sakuraview/core/sources/builtin_sources.dart';
+import 'package:vce1_sakuraview/core/sources/source_adapter_factory.dart';
+import 'package:vce1_sakuraview/core/sources/source_models.dart';
 import 'package:vce1_sakuraview/models/site_config.dart';
 
 class ApiClientFactory {
@@ -14,29 +14,18 @@ class ApiClientFactory {
     final userAgent =
         creds.userAgent.isNotEmpty ? creds.userAgent : config.userAgent;
 
-    switch (config.site) {
-      case ImageSite.yandere:
-        return YandereApiClient(
-          apiKey: apiKey,
-          username: username,
-          cookies: cookies,
-          userAgent: userAgent,
-        );
-      case ImageSite.danbooru:
-        return DanbooruApiClient(
-          apiKey: apiKey,
-          username: username,
-          cookies: cookies,
-          userAgent: userAgent,
-        );
-      case ImageSite.zerochan:
-        return ZerochanApiClient(
-          apiKey: apiKey,
-          username: username,
-          cookies: cookies,
-          userAgent: userAgent,
-        );
-    }
+    final descriptor = BuiltInSources.findById(config.site.name) ??
+        BuiltInSources.catalog.first;
+
+    return SourceAdapterFactory.create(
+      descriptor: descriptor,
+      credentials: SourceAccountCredentials(
+        username: username,
+        apiKey: apiKey,
+        cookies: cookies,
+        userAgent: userAgent,
+      ),
+    );
   }
 
   static String getSiteName(ImageSite site) => site.displayName;

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 
 /// Entrance transition inspired by pixes's `EntrancePageTransition` & `DrillInPageTransition`.
@@ -63,10 +64,10 @@ class SakuraPageRoute<T> extends PageRoute<T> {
   bool get maintainState => true;
 
   @override
-  Duration get transitionDuration => const Duration(milliseconds: 260);
+  Duration get transitionDuration => const Duration(milliseconds: 220);
 
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 220);
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 180);
 
   @override
   Widget buildPage(
@@ -97,13 +98,30 @@ class SakuraPageRoute<T> extends PageRoute<T> {
         child: child,
       );
     }
-    if (Platform.isAndroid) {
-      return const PredictiveBackPageTransitionsBuilder().buildTransitions(
+    if (Platform.isIOS) {
+      return const CupertinoPageTransitionsBuilder().buildTransitions(
         this,
         context,
         animation,
         secondaryAnimation,
         child,
+      );
+    }
+    if (Platform.isAndroid) {
+      final curved = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      );
+      return SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0.05, 0.0),
+          end: Offset.zero,
+        ).animate(curved),
+        child: FadeTransition(
+          opacity: curved,
+          child: child,
+        ),
       );
     }
     final curved = CurvedAnimation(

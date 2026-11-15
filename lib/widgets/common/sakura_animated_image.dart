@@ -1,10 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
-import 'package:shimmer/shimmer.dart';
+import 'package:vce1_sakuraview/core/utils/post_normalization.dart';
 
-/// Custom per-site cookies & User-Agent registry updated by [SiteConfigProvider].
+/// 按图源域名隔离维护的 Cookie、User-Agent 与 Referer 注册表。
 class SiteImageHeaderRegistry {
   static final Map<String, Map<String, String>> _siteOverrides = {};
 
@@ -12,7 +13,10 @@ class SiteImageHeaderRegistry {
     required String domainKeyword,
     String? cookies,
     String? userAgent,
+    String? referer,
   }) {
+    final key = domainKeyword.trim().toLowerCase();
+    if (key.isEmpty) return;
     final map = <String, String>{};
     if (cookies != null && cookies.trim().isNotEmpty) {
       map['Cookie'] = cookies.trim();
@@ -20,10 +24,13 @@ class SiteImageHeaderRegistry {
     if (userAgent != null && userAgent.trim().isNotEmpty) {
       map['User-Agent'] = userAgent.trim();
     }
+    if (referer != null && referer.trim().isNotEmpty) {
+      map['Referer'] = referer.trim();
+    }
     if (map.isEmpty) {
-      _siteOverrides.remove(domainKeyword);
+      _siteOverrides.remove(key);
     } else {
-      _siteOverrides[domainKeyword] = map;
+      _siteOverrides[key] = map;
     }
   }
 
@@ -38,23 +45,32 @@ class SiteImageHeaderRegistry {
   }
 }
 
-/// Site-aware headers helper inspired by pixes's CachedImageProvider.
-Map<String, String> resolveSiteImageHeaders(String url) {
+/// 根据图片 URL 与所属图源 ID 生成适配的请求头（解决防盗链、Cookie 与 UA 问题）。
+Map<String, String> resolveSiteImageHeaders(String url, {String? siteId}) {
   final lower = url.toLowerCase();
+  final cleanSite = (siteId ?? '').trim().toLowerCase();
   final base = <String, String>{
     'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+    'User-Agent': 'vce1.sakuraview/1.2 (vce1)',
   };
-  if (lower.contains('zerochan.net')) {
+
+  if (lower.contains('zerochan.net') || cleanSite == 'zerochan') {
     base['Referer'] = 'https://www.zerochan.net/';
     base['User-Agent'] = 'SakuraView - vce1';
-  } else if (lower.contains('donmai.us')) {
+  } else if (lower.contains('donmai.us') || cleanSite == 'danbooru') {
     base['Referer'] = 'https://danbooru.donmai.us/';
-    base['User-Agent'] = 'vce1.sakuraview/1.2 (vce1)';
-  } else if (lower.contains('yande.re')) {
+  } else if (lower.contains('yande.re') || cleanSite == 'yandere') {
     base['Referer'] = 'https://yande.re/';
-    base['User-Agent'] = 'vce1.sakuraview/1.2 (vce1)';
-  } else {
-    base['User-Agent'] = 'vce1.sakuraview/1.2 (vce1)';
+  } else if (lower.contains('konachan') || cleanSite == 'konachan') {
+    base['Referer'] = 'https://konachan.com/';
+  } else if (lower.contains('gelbooru.com') || cleanSite == 'gelbooru') {
+    base['Referer'] = 'https://gelbooru.com/';
+  } else if (lower.contains('rule34.xxx') || cleanSite == 'rule34') {
+    base['Referer'] = 'https://rule34.xxx/';
+  } else if (lower.contains('sakugabooru.com') || cleanSite == 'sakugabooru') {
+    base['Referer'] = 'https://www.sakugabooru.com/';
+  } else if (lower.contains('e-shuushuu.net') || cleanSite == 'eshuushuu') {
+    base['Referer'] = 'https://e-shuushuu.net/';
   }
 
   final overrides = SiteImageHeaderRegistry.getOverridesForUrl(url);
@@ -64,16 +80,22 @@ Map<String, String> resolveSiteImageHeaders(String url) {
   return base;
 }
 
-/// Returns a [CachedNetworkImageProvider] pre-configured with site-specific headers.
+/// Returns a [CachedNetworkImageProvider] (or [FileImage] for local paths)
+/// pre-configured with site-specific headers.
 ImageProvider createSiteImageProvider(
   String url, {
   Map<String, String>? extraHeaders,
+  String? siteId,
 }) {
-  final baseHeaders = resolveSiteImageHeaders(url);
+  final trimmed = url.trim();
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return FileImage(File(trimmed));
+  }
+  final baseHeaders = resolveSiteImageHeaders(trimmed, siteId: siteId);
   final headers = extraHeaders == null || extraHeaders.isEmpty
       ? baseHeaders
       : <String, String>{...baseHeaders, ...extraHeaders};
-  return CachedNetworkImageProvider(url, headers: headers);
+  return CachedNetworkImageProvider(trimmed, headers: headers);
 }
 
 /// An animated image widget modeled after `pixes`'s `AnimatedImage`
@@ -81,6 +103,7 @@ ImageProvider createSiteImageProvider(
 /// orientation / layout changes without prematurely disposing cached `ui.Image`s.
 class SakuraAnimatedImage extends StatefulWidget {
   final String imageUrl;
+  final String? siteId;
   final double? width;
   final double? height;
   final BoxFit fit;
@@ -92,10 +115,12 @@ class SakuraAnimatedImage extends StatefulWidget {
   final int? cacheWidth;
   final int? cacheHeight;
   final BorderRadius? borderRadius;
+  final bool enableRetryTap;
 
   const SakuraAnimatedImage({
     super.key,
     required this.imageUrl,
+    this.siteId,
     this.width,
     this.height,
     this.fit = BoxFit.cover,
@@ -107,6 +132,7 @@ class SakuraAnimatedImage extends StatefulWidget {
     this.cacheWidth,
     this.cacheHeight,
     this.borderRadius,
+    this.enableRetryTap = true,
   });
 
   @override
@@ -117,11 +143,9 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
     with WidgetsBindingObserver {
   ImageStream? _imageStream;
   ImageInfo? _imageInfo;
-  ImageChunkEvent? _loadingProgress;
   bool _isListeningToStream = false;
   bool _invertColors = false;
   int? _frameNumber;
-  bool _wasSynchronouslyLoaded = false;
   late DisposableBuildContext<State<SakuraAnimatedImage>> _scrollAwareContext;
   Object? _lastException;
   ImageStreamCompleterHandle? _completerHandle;
@@ -132,7 +156,14 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
     final base = createSiteImageProvider(
       widget.imageUrl,
       extraHeaders: widget.headers,
+      siteId: widget.siteId,
     );
+    final isGif =
+        widget.imageUrl.toLowerCase().split('?').first.endsWith('.gif');
+    final isAnimated = SourceUrlResolver.isAnimatedMedia(url: widget.imageUrl);
+    if (isGif || (isAnimated && widget.fit == BoxFit.contain)) {
+      return base;
+    }
     return ResizeImage.resizeIfNeeded(
       widget.cacheWidth,
       widget.cacheHeight,
@@ -167,7 +198,8 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _updateInvertColors();
-    if (widget.imageUrl.isNotEmpty) {
+    if (widget.imageUrl.isNotEmpty &&
+        !SourceUrlResolver.isVideoMedia(url: widget.imageUrl)) {
       _resolveImage(fromDependenciesChange: true);
       if (TickerMode.valuesOf(context).enabled) {
         _listenToStream();
@@ -181,16 +213,18 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
   void didUpdateWidget(SakuraAnimatedImage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.imageUrl != oldWidget.imageUrl ||
+        widget.siteId != oldWidget.siteId ||
         widget.cacheWidth != oldWidget.cacheWidth ||
         widget.cacheHeight != oldWidget.cacheHeight) {
       _retryCount = 0;
       _retryTimer?.cancel();
-      if (widget.imageUrl.isNotEmpty) {
+      if (widget.imageUrl.isNotEmpty &&
+          !SourceUrlResolver.isVideoMedia(url: widget.imageUrl)) {
         _resolveImage();
       } else {
         _stopListeningToStream();
         _imageInfo = null;
-        _lastException = ArgumentError('Empty URL');
+        _lastException = widget.imageUrl.isEmpty ? ArgumentError('Empty URL') : null;
       }
     }
   }
@@ -250,15 +284,12 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
     if (!mounted) return;
     if (synchronousCall) {
       _imageInfo = imageInfo;
-      _loadingProgress = null;
       _lastException = null;
       _frameNumber = _frameNumber == null ? 0 : _frameNumber! + 1;
-      _wasSynchronouslyLoaded = true;
       return;
     }
     setState(() {
       _imageInfo = imageInfo;
-      _loadingProgress = null;
       _lastException = null;
       _frameNumber = _frameNumber == null ? 0 : _frameNumber! + 1;
     });
@@ -267,7 +298,6 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
   void _handleImageChunk(ImageChunkEvent event) {
     if (!mounted) return;
     setState(() {
-      _loadingProgress = event;
       _lastException = null;
     });
   }
@@ -310,9 +340,7 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
       _imageInfo = null;
     }
 
-    _loadingProgress = null;
     _frameNumber = null;
-    _wasSynchronouslyLoaded = false;
 
     _imageStream = newStream;
     if (_isListeningToStream) {
@@ -352,7 +380,6 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
     setState(() {
       _retryCount = 0;
       _lastException = null;
-      _loadingProgress = null;
     });
     PaintingBinding.instance.imageCache.evict(_effectiveProvider);
     _stopListeningToStream();
@@ -364,124 +391,141 @@ class _SakuraAnimatedImageState extends State<SakuraAnimatedImage>
 
   @override
   Widget build(BuildContext context) {
-    Widget content;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final bool hasBoundedBox =
+            constraints.hasBoundedWidth && constraints.hasBoundedHeight;
+        final double? resolvedWidth =
+            widget.width ?? (hasBoundedBox ? double.infinity : null);
+        final double? resolvedHeight =
+            widget.height ?? (hasBoundedBox ? double.infinity : null);
 
-    if (widget.imageUrl.isEmpty || _lastException != null) {
-      content = _buildErrorWidget(context);
-    } else if (_imageInfo != null) {
-      Widget raw = RawImage(
-        image: _imageInfo?.image,
-        debugImageLabel: _imageInfo?.debugLabel,
-        width: widget.width,
-        height: widget.height,
-        scale: _imageInfo?.scale ?? 1.0,
-        fit: widget.fit,
-        alignment: widget.alignment,
-        invertColors: _invertColors,
-        filterQuality: widget.filterQuality,
-      );
-      if (!_wasSynchronouslyLoaded) {
-        raw = TweenAnimationBuilder<double>(
-          key: ValueKey<String>(widget.imageUrl),
-          tween: Tween<double>(begin: 0.0, end: 1.0),
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          builder: (ctx, opacity, child) => Opacity(
-            opacity: opacity,
-            child: child,
-          ),
-          child: raw,
+        Widget content;
+        if (SourceUrlResolver.isVideoMedia(url: widget.imageUrl)) {
+          content = KeyedSubtree(
+            key: const ValueKey<String>('video_media'),
+            child: Container(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              alignment: Alignment.center,
+              child: Icon(
+                Icons.play_circle_outline_rounded,
+                size: 36,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          );
+        } else if (widget.imageUrl.isEmpty || _lastException != null) {
+          content = KeyedSubtree(
+            key: const ValueKey<String>('error'),
+            child: _buildErrorWidget(context),
+          );
+        } else if (_imageInfo != null) {
+          Widget img = RawImage(
+            image: _imageInfo?.image,
+            debugImageLabel: _imageInfo?.debugLabel,
+            width: resolvedWidth,
+            height: resolvedHeight,
+            scale: _imageInfo?.scale ?? 1.0,
+            fit: widget.fit,
+            alignment: widget.alignment,
+            invertColors: _invertColors,
+            filterQuality: widget.filterQuality,
+          );
+          if (hasBoundedBox && widget.fit == BoxFit.cover) {
+            img = SizedBox.expand(child: img);
+          }
+          content = KeyedSubtree(
+            key: ValueKey<String>('image_${widget.imageUrl}'),
+            child: img,
+          );
+        } else {
+          Widget placeholder = _buildLoadingWidget(context);
+          if (hasBoundedBox) {
+            placeholder = SizedBox.expand(child: placeholder);
+          }
+          content = KeyedSubtree(
+            key: const ValueKey<String>('placeholder'),
+            child: placeholder,
+          );
+        }
+
+        Widget switcher = AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          reverseDuration: const Duration(milliseconds: 200),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          layoutBuilder: (currentChild, previousChildren) {
+            return Stack(
+              fit: (hasBoundedBox || widget.width != null && widget.height != null)
+                  ? StackFit.expand
+                  : StackFit.loose,
+              alignment: Alignment.center,
+              children: [
+                ...previousChildren,
+                if (currentChild != null) currentChild,
+              ],
+            );
+          },
+          child: content,
         );
-      }
-      content = raw;
-    } else {
-      content = _buildLoadingWidget(context);
-    }
 
-    if (widget.borderRadius != null) {
-      content = ClipRRect(
-        borderRadius: widget.borderRadius!,
-        child: content,
-      );
-    }
+        if (widget.borderRadius != null) {
+          switcher = ClipRRect(
+            borderRadius: widget.borderRadius!,
+            clipBehavior: Clip.antiAlias,
+            child: switcher,
+          );
+        }
 
-    return SizedBox(
-      width: widget.width,
-      height: widget.height,
-      child: content,
+        return SizedBox(
+          width: resolvedWidth,
+          height: resolvedHeight,
+          child: switcher,
+        );
+      },
     );
   }
 
   Widget _buildLoadingWidget(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
-    final baseColor = isDark
-        ? cs.surfaceContainerHighest.withAlpha(110)
-        : cs.surfaceContainerHighest.withAlpha(160);
-    final highlightColor = isDark
-        ? cs.surfaceContainerHighest.withAlpha(190)
-        : Colors.white.withAlpha(220);
-
-    double? progress;
-    if (_loadingProgress != null &&
-        _loadingProgress!.expectedTotalBytes != null &&
-        _loadingProgress!.expectedTotalBytes! > 0) {
-      progress = _loadingProgress!.cumulativeBytesLoaded /
-          _loadingProgress!.expectedTotalBytes!;
-    }
-
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Shimmer.fromColors(
-          baseColor: baseColor,
-          highlightColor: highlightColor,
-          period: const Duration(milliseconds: 1300),
-          child: const ColoredBox(color: Colors.white),
-        ),
-        if (widget.showProgressRing || (progress != null && progress > 0.05))
-          Center(
-            child: SizedBox(
-              width: 26,
-              height: 26,
-              child: CircularProgressIndicator(
-                value: progress,
-                strokeWidth: 2.2,
-                color: cs.primary.withAlpha(200),
-                backgroundColor: cs.primary.withAlpha(40),
-              ),
-            ),
-          ),
-      ],
+    return ColoredBox(
+      color: cs.surfaceContainerHighest.withValues(alpha: 0.40),
     );
   }
 
   Widget _buildErrorWidget(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final body = Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.broken_image_outlined,
+            color: cs.onSurfaceVariant.withAlpha(140),
+            size: 28,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            widget.enableRetryTap ? '点按重试' : '点击查看详情',
+            style: TextStyle(
+              fontSize: 10,
+              color: cs.onSurfaceVariant.withAlpha(140),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (!widget.enableRetryTap) {
+      return ColoredBox(
+        color: cs.surfaceContainerHighest.withAlpha(90),
+        child: body,
+      );
+    }
     return Material(
       color: cs.surfaceContainerHighest.withAlpha(90),
       child: InkWell(
         onTap: _manualRetry,
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.broken_image_outlined,
-                color: cs.onSurfaceVariant.withAlpha(140),
-                size: 28,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '点按重试',
-                style: TextStyle(
-                  fontSize: 10,
-                  color: cs.onSurfaceVariant.withAlpha(140),
-                ),
-              ),
-            ],
-          ),
-        ),
+        child: body,
       ),
     );
   }
